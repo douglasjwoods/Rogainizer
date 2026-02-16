@@ -65,7 +65,7 @@ This starts:
 - `api` (Express) on port `3000`
 - `web` (Vite + Vue) on port `5173`
 
-The MySQL schema and `users` table are initialized automatically from `backend/sql/init.sql`.
+The MySQL schema and `events` table are initialized automatically from `backend/sql/init.sql`.
 
 Stop and remove containers:
 
@@ -88,5 +88,7 @@ docker compose logs -f
 ## API routes
 
 - `GET /api/health` - checks API and DB connectivity
-- `GET /api/users` - lists up to 100 users
-- `POST /api/users` - creates user (`{ "name": "...", "email": "..." }`)
+- `GET /api/events` - lists all events
+- `POST /api/events` - creates event (`{ "name": "...", "date": "YYYY-MM-DD", "location": "...", "courses": ["6hr"], "categories": ["MO"] }`)
+- `PUT /api/events/:id` - updates an existing event
+- `DELETE /api/events/:id` - deletes an event
