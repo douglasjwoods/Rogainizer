@@ -19,6 +19,38 @@ CREATE TABLE IF NOT EXISTS events (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS teams (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  event_id INT NOT NULL,
+  name VARCHAR(200) NOT NULL,
+  competitors TEXT NOT NULL,
+  course VARCHAR(100) NOT NULL,
+  category VARCHAR(100) NOT NULL,
+  score DECIMAL(10,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_teams_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  INDEX idx_teams_event_id (event_id)
+);
+
+SET @team_score_exists = (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = 'rogainizer'
+    AND TABLE_NAME = 'teams'
+    AND COLUMN_NAME = 'score'
+);
+
+SET @add_team_score_sql = IF(
+  @team_score_exists = 0,
+  'ALTER TABLE teams ADD COLUMN score DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER category',
+  'SELECT 1'
+);
+
+PREPARE add_team_score_stmt FROM @add_team_score_sql;
+EXECUTE add_team_score_stmt;
+DEALLOCATE PREPARE add_team_score_stmt;
+
 SET @courses_exists = (
   SELECT COUNT(*)
   FROM information_schema.COLUMNS

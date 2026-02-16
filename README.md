@@ -92,3 +92,7 @@ docker compose logs -f
 - `POST /api/events` - creates event (`{ "name": "...", "date": "YYYY-MM-DD", "location": "...", "courses": ["6hr"], "categories": ["MO"] }`)
 - `PUT /api/events/:id` - updates an existing event
 - `DELETE /api/events/:id` - deletes an event
+- `GET /api/events/:eventId/teams` - lists teams for an event
+- `POST /api/events/:eventId/teams` - creates team (`{ "name": "...", "competitors": "Alice, Bob", "course": "6hr", "category": "MO" }`)
+- `PUT /api/events/:eventId/teams/:teamId` - updates an event team
+- `DELETE /api/events/:eventId/teams/:teamId` - deletes an event team
