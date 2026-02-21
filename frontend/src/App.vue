@@ -1,10 +1,27 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import JsonTreeNode from './components/JsonTreeNode.vue';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const currentView = ref('events');
 const loading = ref(false);
 const errorMessage = ref('');
 const events = ref([]);
+const users = ref([]);
+const usersLoading = ref(false);
+const usersErrorMessage = ref('');
+const jsonLoadErrorMessage = ref('');
+const jsonLoadData = ref(null);
+const jsonLoadLoading = ref(false);
+const eventsIndex = ref([]);
+const eventsIndexLoading = ref(false);
+const eventsIndexErrorMessage = ref('');
+const selectedEventYear = ref('');
+const selectedEventSeries = ref('');
+const selectedEventTitle = ref('');
+const transformErrorMessage = ref('');
+const transformedRows = ref([]);
+const transformedColumns = ref([]);
 const teams = ref([]);
 const teamsLoading = ref(false);
 const teamsErrorMessage = ref('');
@@ -27,6 +44,17 @@ const editForm = reactive({
   location: '',
   courses: '',
   categories: ''
+});
+
+const newUser = reactive({
+  name: '',
+  email: ''
+});
+
+const editingUserKey = ref(null);
+const editUserForm = reactive({
+  name: '',
+  email: ''
 });
 
 const newTeam = reactive({
@@ -73,6 +101,98 @@ const sortedTeams = computed(() => {
   return items;
 });
 
+const filteredEventSeries = computed(() => {
+  const targetYear = String(selectedEventYear.value || '').trim();
+  if (!targetYear) {
+    return [];
+  }
+
+  return [...new Set(
+    eventsIndex.value
+      .filter((item) => String(item?.eventYear ?? '').trim() === targetYear)
+      .map((item) => String(item?.eventSeries || '').trim())
+      .filter(Boolean)
+  )].sort((left, right) => left.localeCompare(right));
+});
+
+const filteredEvents = computed(() => {
+  const targetYear = String(selectedEventYear.value || '').trim();
+  const targetSeries = String(selectedEventSeries.value || '').trim();
+
+  if (!targetYear || !targetSeries) {
+    return [];
+  }
+
+  const matchingSeries = eventsIndex.value.filter(
+    (item) =>
+      String(item?.eventYear ?? '').trim() === targetYear
+      && String(item?.eventSeries || '').trim() === targetSeries
+  );
+
+  return matchingSeries
+    .flatMap((item, seriesIndex) =>
+      (Array.isArray(item?.events) ? item.events : []).map((eventItem, eventIndex) => ({
+        key: `${seriesIndex}-${eventIndex}-${String(eventItem?.eventTitle || eventItem?.eventName || '').trim()}`,
+        title: String(eventItem?.eventTitle || eventItem?.eventName || '').trim(),
+        eventName: String(eventItem?.eventName || '').trim(),
+        eventCourse: String(eventItem?.eventCourse || '').trim(),
+        path: String(eventItem?.path || '').trim()
+      }))
+    )
+    .filter((eventItem) => Boolean(eventItem.title));
+});
+
+const selectedEventDetails = computed(() =>
+  filteredEvents.value.find((eventItem) => eventItem.key === selectedEventTitle.value) || null
+);
+
+const selectedEventResultsUrl = computed(() => {
+  const year = String(selectedEventYear.value || '').trim();
+  const details = selectedEventDetails.value;
+
+  if (!year || !details) {
+    return '';
+  }
+
+  const toSlug = (value) =>
+    String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-');
+
+  const hasEventCourse = Boolean(String(details.eventCourse || '').trim());
+
+  const eventNameSource = hasEventCourse
+    ? details.eventName
+    : selectedEventSeries.value;
+
+  const eventCourseSource = hasEventCourse
+    ? details.eventCourse
+    : details.eventName;
+
+  const eventNameSlug = toSlug(eventNameSource);
+  const eventCourseSlug = toSlug(eventCourseSource);
+
+  if (!eventNameSlug || !eventCourseSlug) {
+    return '';
+  }
+
+  return `https://rogaine-results.com/${year}/${eventNameSlug}/${eventCourseSlug}/results.json`;
+});
+
+watch(filteredEventSeries, (options) => {
+  if (!options.includes(selectedEventSeries.value)) {
+    selectedEventSeries.value = '';
+  }
+});
+
+watch(filteredEvents, (options) => {
+  if (!options.some((eventItem) => eventItem.key === selectedEventTitle.value)) {
+    selectedEventTitle.value = '';
+  }
+});
+
 function normalizeList(value) {
   if (!Array.isArray(value)) {
     return [];
@@ -97,6 +217,224 @@ function selectedEventCategories() {
   return normalizeList(selectedTeamsEvent.value?.categories || []);
 }
 
+function userKey(user) {
+  return `${user.name}::${user.email}`;
+}
+
+function switchView(view) {
+  currentView.value = view;
+
+  if (view === 'users') {
+    closeTeamsView();
+    fetchUsers();
+  } else if (view === 'events') {
+    fetchEvents();
+  } else if (view === 'json-loader') {
+    closeTeamsView();
+    fetchEventsIndex();
+  } else {
+    closeTeamsView();
+  }
+}
+
+async function fetchEventsIndex() {
+  if (eventsIndexLoading.value) {
+    return;
+  }
+
+  eventsIndexLoading.value = true;
+  eventsIndexErrorMessage.value = '';
+
+  try {
+    const query = new URLSearchParams({
+      url: 'https://rogaine-results.com/events.json'
+    });
+
+    const response = await fetch(`${apiBaseUrl}/api/json-loader?${query.toString()}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load events index');
+    }
+
+    const data = await response.json();
+    eventsIndex.value = Array.isArray(data) ? data : [];
+  } catch (error) {
+    eventsIndexErrorMessage.value = error.message || 'Failed to load events index';
+  } finally {
+    eventsIndexLoading.value = false;
+  }
+}
+
+function normalizeNameValue(value) {
+  const collapsed = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!collapsed) {
+    return '';
+  }
+
+  const lettersOnly = collapsed.replace(/[^a-zA-Z]/g, '');
+  if (!lettersOnly) {
+    return collapsed;
+  }
+
+  const isAllUpper = lettersOnly === lettersOnly.toUpperCase();
+  const isAllLower = lettersOnly === lettersOnly.toLowerCase();
+
+  if (!(isAllUpper || isAllLower)) {
+    return collapsed;
+  }
+
+  return collapsed
+    .toLowerCase()
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function parseTeamNameAndMembers(rawName) {
+  const fullName = String(rawName || '');
+  const separatorIndex = fullName.indexOf(';');
+
+  if (separatorIndex >= 0) {
+    const teamName = normalizeNameValue(fullName.slice(0, separatorIndex));
+    const membersText = fullName.slice(separatorIndex + 1);
+    const members = membersText
+      .split(',')
+      .map((member) => normalizeNameValue(member))
+      .filter(Boolean);
+
+    return {
+      teamName,
+      members
+    };
+  }
+
+  const colonIndex = fullName.indexOf(':');
+  if (colonIndex >= 0) {
+    const teamName = normalizeNameValue(fullName.slice(0, colonIndex));
+    const membersText = fullName.slice(colonIndex + 1);
+    const members = membersText
+      .split(',')
+      .map((member) => normalizeNameValue(member.replace(/[.)]+$/g, '')))
+      .filter(Boolean);
+
+    return {
+      teamName,
+      members
+    };
+  }
+
+  const openParenIndex = fullName.indexOf('(');
+  if (openParenIndex >= 0) {
+    const teamName = normalizeNameValue(fullName.slice(0, openParenIndex));
+    const membersText = fullName.slice(openParenIndex + 1);
+    const members = membersText
+      .split(',')
+      .map((member) => normalizeNameValue(member.replace(/[.)]+$/g, '')))
+      .filter(Boolean);
+
+    return {
+      teamName,
+      members
+    };
+  }
+
+  const teamName = normalizeNameValue(fullName);
+  const members = [teamName].filter(Boolean);
+
+  return {
+    teamName,
+    members
+  };
+}
+
+function transformLoadedJson() {
+  transformErrorMessage.value = '';
+  transformedRows.value = [];
+
+  if (!jsonLoadData.value || typeof jsonLoadData.value !== 'object') {
+    transformErrorMessage.value = 'Load JSON data first.';
+    return;
+  }
+
+  const categorySource = Array.isArray(jsonLoadData.value.categories)
+    ? jsonLoadData.value.categories
+    : Array.isArray(jsonLoadData.value.event_grades)
+      ? jsonLoadData.value.event_grades
+      : [];
+
+  const categories = categorySource.map((category) => String(category).trim()).filter(Boolean);
+
+  const teamsData = Array.isArray(jsonLoadData.value.teams) ? jsonLoadData.value.teams : [];
+
+  if (teamsData.length === 0) {
+    transformErrorMessage.value = 'No teams found in loaded JSON.';
+    return;
+  }
+
+  const rows = [];
+
+  for (const team of teamsData) {
+    const { teamName, members } = parseTeamNameAndMembers(team?.name);
+    const finalScore = team?.final_score ?? null;
+    const teamCategories = new Set(
+      (Array.isArray(team?.categories) ? team.categories : [])
+        .map((category) => String(category).trim())
+        .filter(Boolean)
+    );
+
+    for (const member of members) {
+      const row = {
+        team_name: teamName,
+        team_member: member,
+        final_score: finalScore
+      };
+
+      for (const category of categories) {
+        row[category] = teamCategories.has(category) ? finalScore : '';
+      }
+
+      rows.push(row);
+    }
+  }
+
+  transformedColumns.value = ['team_name', 'team_member', 'final_score', ...categories];
+  transformedRows.value = rows;
+}
+
+async function loadSelectedEventJson() {
+  const url = selectedEventResultsUrl.value;
+  if (!url) {
+    jsonLoadErrorMessage.value = 'Select year and event before loading.';
+    return;
+  }
+
+  jsonLoadLoading.value = true;
+  jsonLoadErrorMessage.value = '';
+
+  try {
+    const query = new URLSearchParams({ url });
+    const response = await fetch(`${apiBaseUrl}/api/json-loader?${query.toString()}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load JSON from URL');
+    }
+
+    const data = await response.json();
+    jsonLoadData.value = data;
+    transformErrorMessage.value = '';
+    transformedRows.value = [];
+    transformedColumns.value = [];
+  } catch (error) {
+    jsonLoadErrorMessage.value = error.message || 'Failed to load JSON';
+    jsonLoadData.value = null;
+    transformErrorMessage.value = '';
+    transformedRows.value = [];
+    transformedColumns.value = [];
+  } finally {
+    jsonLoadLoading.value = false;
+  }
+}
+
 async function fetchEvents() {
   loading.value = true;
   errorMessage.value = '';
@@ -111,6 +449,141 @@ async function fetchEvents() {
     errorMessage.value = error.message;
   } finally {
     loading.value = false;
+  }
+}
+
+async function fetchUsers() {
+  usersLoading.value = true;
+  usersErrorMessage.value = '';
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/users`);
+    if (!response.ok) {
+      throw new Error('Failed to load users');
+    }
+    users.value = await response.json();
+  } catch (error) {
+    usersErrorMessage.value = error.message;
+  } finally {
+    usersLoading.value = false;
+  }
+}
+
+function resetNewUserForm() {
+  newUser.name = '';
+  newUser.email = '';
+}
+
+function cancelUserEdit() {
+  editingUserKey.value = null;
+  editUserForm.name = '';
+  editUserForm.email = '';
+}
+
+async function addUser() {
+  usersErrorMessage.value = '';
+
+  const payload = {
+    name: newUser.name.trim(),
+    email: newUser.email.trim()
+  };
+
+  if (!payload.name || !payload.email) {
+    usersErrorMessage.value = 'Name and Email are required.';
+    return;
+  }
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to save user');
+    }
+
+    resetNewUserForm();
+    await fetchUsers();
+  } catch (error) {
+    usersErrorMessage.value = error.message;
+  }
+}
+
+function startUserEdit(user) {
+  editingUserKey.value = userKey(user);
+  editUserForm.name = user.name;
+  editUserForm.email = user.email;
+}
+
+async function saveUserEdit(originalUser) {
+  usersErrorMessage.value = '';
+
+  const payload = {
+    name: editUserForm.name.trim(),
+    email: editUserForm.email.trim()
+  };
+
+  if (!payload.name || !payload.email) {
+    usersErrorMessage.value = 'Name and Email are required.';
+    return;
+  }
+
+  try {
+    const query = new URLSearchParams({
+      name: originalUser.name,
+      email: originalUser.email
+    });
+
+    const response = await fetch(`${apiBaseUrl}/api/users?${query.toString()}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to update user');
+    }
+
+    cancelUserEdit();
+    await fetchUsers();
+  } catch (error) {
+    usersErrorMessage.value = error.message;
+  }
+}
+
+async function deleteUser(user) {
+  usersErrorMessage.value = '';
+
+  try {
+    const query = new URLSearchParams({
+      name: user.name,
+      email: user.email
+    });
+
+    const response = await fetch(`${apiBaseUrl}/api/users?${query.toString()}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to delete user');
+    }
+
+    if (editingUserKey.value === userKey(user)) {
+      cancelUserEdit();
+    }
+
+    await fetchUsers();
+  } catch (error) {
+    usersErrorMessage.value = error.message;
   }
 }
 
@@ -423,12 +896,19 @@ onMounted(() => {
 
 <template>
   <main>
-    <h1>Rogaine Events</h1>
+    <h1>Rogainizer</h1>
 
-    <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-    <p v-if="loading">Loading events...</p>
+    <div class="view-switcher">
+      <button type="button" :class="{ active: currentView === 'events' }" @click="switchView('events')">Events</button>
+      <button type="button" :class="{ active: currentView === 'users' }" @click="switchView('users')">Users</button>
+      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">JSON Loader</button>
+    </div>
 
-    <table v-if="!loading && !selectedTeamsEvent" class="events-table">
+    <template v-if="currentView === 'events'">
+      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
+      <p v-if="loading">Loading events...</p>
+
+      <table v-if="!loading && !selectedTeamsEvent" class="events-table">
       <thead>
         <tr>
           <th>Name</th>
@@ -504,9 +984,9 @@ onMounted(() => {
           <td colspan="6" class="empty-state">No events yet.</td>
         </tr>
       </tbody>
-    </table>
+      </table>
 
-    <section v-if="selectedTeamsEvent" class="teams-section">
+      <section v-if="selectedTeamsEvent" class="teams-section">
       <button type="button" class="back-button" @click="closeTeamsView">Back to Events</button>
       <h2>Teams - {{ selectedTeamsEvent.name }}</h2>
       <p class="teams-subtitle">Add teams for this event.</p>
@@ -626,7 +1106,129 @@ onMounted(() => {
           </tr>
         </tbody>
       </table>
-    </section>
+      </section>
+    </template>
+
+    <template v-else-if="currentView === 'users'">
+      <p v-if="usersErrorMessage" class="error">{{ usersErrorMessage }}</p>
+      <p v-if="usersLoading">Loading users...</p>
+
+      <table v-if="!usersLoading" class="events-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <input v-model="newUser.name" type="text" placeholder="User name" />
+            </td>
+            <td>
+              <input v-model="newUser.email" type="email" placeholder="name@example.com" />
+            </td>
+            <td class="actions-cell">
+              <button type="button" @click="addUser">Add</button>
+            </td>
+          </tr>
+
+          <tr v-for="user in users" :key="userKey(user)">
+            <td v-if="editingUserKey === userKey(user)">
+              <input v-model="editUserForm.name" type="text" />
+            </td>
+            <td v-else>{{ user.name }}</td>
+
+            <td v-if="editingUserKey === userKey(user)">
+              <input v-model="editUserForm.email" type="email" />
+            </td>
+            <td v-else>{{ user.email }}</td>
+
+            <td class="actions-cell">
+              <template v-if="editingUserKey === userKey(user)">
+                <button type="button" @click="saveUserEdit(user)">Save</button>
+                <button type="button" @click="cancelUserEdit">Cancel</button>
+              </template>
+              <template v-else>
+                <button type="button" @click="startUserEdit(user)">Edit</button>
+                <button type="button" @click="deleteUser(user)">Delete</button>
+              </template>
+            </td>
+          </tr>
+
+          <tr v-if="users.length === 0">
+            <td colspan="3" class="empty-state">No users yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
+
+    <template v-else>
+      <section class="json-loader-section">
+        <h2>Load JSON</h2>
+        <p class="json-loader-subtitle">Select year, event series, and event, then click Load.</p>
+        <div class="json-loader-controls">
+          <label>
+            Year
+            <input v-model="selectedEventYear" type="text" inputmode="numeric" placeholder="2026" />
+          </label>
+          <label>
+            Event Series
+            <select v-model="selectedEventSeries" :disabled="filteredEventSeries.length === 0">
+              <option value="" disabled>Select event series</option>
+              <option v-for="series in filteredEventSeries" :key="`series-${series}`" :value="series">
+                {{ series }}
+              </option>
+            </select>
+          </label>
+          <label>
+            Event
+            <select v-model="selectedEventTitle" :disabled="filteredEvents.length === 0">
+              <option value="" disabled>Select event</option>
+              <option v-for="eventItem in filteredEvents" :key="`event-${eventItem.key}`" :value="eventItem.key">
+                {{ eventItem.title }}
+              </option>
+            </select>
+          </label>
+        </div>
+        <p v-if="eventsIndexLoading">Loading events index...</p>
+        <p v-if="eventsIndexErrorMessage" class="error">{{ eventsIndexErrorMessage }}</p>
+        <button type="button" @click="loadSelectedEventJson" :disabled="jsonLoadLoading || !selectedEventResultsUrl">
+          {{ jsonLoadLoading ? 'Loading...' : 'Load' }}
+        </button>
+        <p v-if="selectedEventResultsUrl" class="json-loader-url">{{ selectedEventResultsUrl }}</p>
+        <button type="button" @click="transformLoadedJson" :disabled="jsonLoadLoading || jsonLoadData === null">
+          Transform
+        </button>
+        <p v-if="jsonLoadErrorMessage" class="error">{{ jsonLoadErrorMessage }}</p>
+        <p v-if="transformErrorMessage" class="error">{{ transformErrorMessage }}</p>
+
+        <div v-if="jsonLoadData !== null" class="json-panels">
+          <div class="json-output-panel">
+            <h3>Raw JSON</h3>
+            <JsonTreeNode :value="jsonLoadData" label="root" />
+          </div>
+
+          <div class="json-output-panel transformed-output-panel">
+            <h3>Transformed Data</h3>
+            <table v-if="transformedRows.length > 0" class="events-table transformed-table">
+              <thead>
+                <tr>
+                  <th v-for="column in transformedColumns" :key="`transform-header-${column}`">{{ column }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, rowIndex) in transformedRows" :key="`transform-row-${rowIndex}`">
+                  <td v-for="column in transformedColumns" :key="`transform-cell-${rowIndex}-${column}`">{{ row[column] }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-else class="empty-state">Run Transform to view transformed rows.</p>
+          </div>
+        </div>
+      </section>
+    </template>
   </main>
 </template>
 
@@ -659,6 +1261,16 @@ select {
 button {
   padding: 0.5rem 0.8rem;
   cursor: pointer;
+}
+
+.view-switcher {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.view-switcher .active {
+  font-weight: 700;
 }
 
 .events-table {
@@ -713,5 +1325,76 @@ button {
 
 .empty-state {
   text-align: center;
+}
+
+.json-loader-section {
+  margin-top: 1rem;
+  text-align: left;
+}
+
+.json-loader-subtitle {
+  margin-top: 0;
+}
+
+.json-loader-controls {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 280px));
+  margin: 0.5rem 0 1rem;
+}
+
+.json-loader-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.json-loader-url {
+  margin: 0.5rem 0;
+  word-break: break-all;
+}
+
+.json-output-panel {
+  margin-top: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+.json-output-panel h3 {
+  margin-top: 0;
+}
+
+.json-panels {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+  align-items: start;
+  width: 100%;
+}
+
+.transformed-table {
+  margin-top: 0;
+  width: max-content;
+}
+
+.transformed-output-panel {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+@media (min-width: 1024px) {
+  .json-loader-section {
+    width: 100vw;
+    margin-left: calc(50% - 50vw);
+    padding: 0 1rem;
+    box-sizing: border-box;
+  }
+
+  .json-panels {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
 }
 </style>

@@ -88,6 +88,10 @@ docker compose logs -f
 ## API routes
 
 - `GET /api/health` - checks API and DB connectivity
+- `GET /api/users` - lists users
+- `POST /api/users` - creates user (`{ "name": "...", "email": "..." }`)
+- `PUT /api/users?name={originalName}&email={originalEmail}` - updates user key/data (`{ "name": "...", "email": "..." }`)
+- `DELETE /api/users?name={name}&email={email}` - deletes user by key
 - `GET /api/events` - lists all events
 - `POST /api/events` - creates event (`{ "name": "...", "date": "YYYY-MM-DD", "location": "...", "courses": ["6hr"], "categories": ["MO"] }`)
 - `PUT /api/events/:id` - updates an existing event
@@ -96,3 +100,5 @@ docker compose logs -f
 - `POST /api/events/:eventId/teams` - creates team (`{ "name": "...", "competitors": "Alice, Bob", "course": "6hr", "category": "MO" }`)
 - `PUT /api/events/:eventId/teams/:teamId` - updates an event team
 - `DELETE /api/events/:eventId/teams/:teamId` - deletes an event team
+
+Users are keyed by the `name + email` combination.

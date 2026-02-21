@@ -4,9 +4,48 @@ USE rogainizer;
 CREATE TABLE IF NOT EXISTS users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
-  email VARCHAR(255) NOT NULL UNIQUE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  email VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_users_name_email (name, email)
 );
+
+SET @users_email_unique_exists = (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = 'rogainizer'
+    AND TABLE_NAME = 'users'
+    AND INDEX_NAME = 'email'
+    AND NON_UNIQUE = 0
+);
+
+SET @drop_users_email_unique_sql = IF(
+  @users_email_unique_exists > 0,
+  'ALTER TABLE users DROP INDEX email',
+  'SELECT 1'
+);
+
+PREPARE drop_users_email_unique_stmt FROM @drop_users_email_unique_sql;
+EXECUTE drop_users_email_unique_stmt;
+DEALLOCATE PREPARE drop_users_email_unique_stmt;
+
+SET @users_name_email_unique_exists = (
+  SELECT COUNT(*)
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = 'rogainizer'
+    AND TABLE_NAME = 'users'
+    AND INDEX_NAME = 'uq_users_name_email'
+    AND NON_UNIQUE = 0
+);
+
+SET @add_users_name_email_unique_sql = IF(
+  @users_name_email_unique_exists = 0,
+  'ALTER TABLE users ADD CONSTRAINT uq_users_name_email UNIQUE (name, email)',
+  'SELECT 1'
+);
+
+PREPARE add_users_name_email_unique_stmt FROM @add_users_name_email_unique_sql;
+EXECUTE add_users_name_email_unique_stmt;
+DEALLOCATE PREPARE add_users_name_email_unique_stmt;
 
 CREATE TABLE IF NOT EXISTS events (
   id INT AUTO_INCREMENT PRIMARY KEY,
