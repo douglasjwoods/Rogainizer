@@ -208,8 +208,8 @@ const selectedEventResultsUrl = computed(() => {
   const hasEventCourse = Boolean(String(details.eventCourse || '').trim());
 
   const eventNameSource = hasEventCourse
-    ? details.eventName
-    : selectedEventSeries.value;
+      ? `${selectedEventSeries.value}/${details.eventName}`
+      : selectedEventSeries.value;
 
   const eventCourseSource = hasEventCourse
     ? details.eventCourse
