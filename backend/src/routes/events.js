@@ -3,50 +3,21 @@ import pool from '../config/db.js';
 
 const router = Router();
 
-function normalizeList(value) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
-}
-
-function parseStoredList(value) {
-  if (Array.isArray(value)) {
-    return normalizeList(value);
-  }
-
-  if (typeof value !== 'string') {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(value);
-    return normalizeList(parsed);
-  } catch {
-    return [];
-  }
-}
-
-function mapEventRow(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    date: row.date,
-    location: row.location,
-    courses: parseStoredList(row.courses),
-    categories: parseStoredList(row.categories)
-  };
-}
-
 router.get('/', async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, name, DATE_FORMAT(event_date, '%Y-%m-%d') AS date, location, courses, categories
+      `SELECT
+         id,
+         year,
+         series,
+         name,
+         DATE_FORMAT(date, '%Y-%m-%d') AS date,
+         organiser,
+         duration_hours AS duration
        FROM events
-       ORDER BY event_date ASC, id ASC`
+       ORDER BY year ASC, series ASC, date ASC, id ASC`
     );
-    res.json(rows.map(mapEventRow));
+    res.json(rows);
   } catch (error) {
     if (error.code === 'ER_NO_SUCH_TABLE') {
       return res.status(500).json({
@@ -57,88 +28,99 @@ router.get('/', async (_req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
-  const { name, date, location, courses, categories } = req.body;
-  const normalizedCourses = normalizeList(courses);
-  const normalizedCategories = normalizeList(categories);
+router.post('/save-result', async (req, res) => {
+  const {
+    year,
+    series,
+    name,
+    date,
+    organiser,
+    duration,
+    overwrite = false
+  } = req.body;
 
-  if (!name || !date || !location) {
-    return res.status(400).json({ message: 'name, date, and location are required' });
+  const eventYear = Number(year);
+  const durationHours = Number(duration);
+
+  if (!Number.isInteger(eventYear) || eventYear <= 0) {
+    return res.status(400).json({ message: 'year must be a positive integer' });
+  }
+
+  if (!series || !name || !date || !organiser || !Number.isFinite(durationHours)) {
+    return res.status(400).json({
+      message: 'year, series, name, date, organiser, and duration are required'
+    });
   }
 
   try {
-    const [result] = await pool.query(
-      'INSERT INTO events (name, event_date, location, courses, categories) VALUES (?, ?, ?, ?, ?)',
-      [name, date, location, JSON.stringify(normalizedCourses), JSON.stringify(normalizedCategories)]
-    );
-
-    const [rows] = await pool.query(
-      `SELECT id, name, DATE_FORMAT(event_date, '%Y-%m-%d') AS date, location, courses, categories
+    const [existingRows] = await pool.query(
+      `SELECT id
        FROM events
-       WHERE id = ?`,
-      [result.insertId]
+       WHERE year = ? AND series = ? AND name = ?
+       LIMIT 1`,
+      [eventYear, series, name]
     );
 
-    res.status(201).json(mapEventRow(rows[0]));
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+    const existingEvent = existingRows[0] || null;
 
-router.put('/:id', async (req, res) => {
-  const eventId = Number(req.params.id);
-  const { name, date, location, courses, categories } = req.body;
-  const normalizedCourses = normalizeList(courses);
-  const normalizedCategories = normalizeList(categories);
-
-  if (!Number.isInteger(eventId) || eventId <= 0) {
-    return res.status(400).json({ message: 'invalid event id' });
-  }
-
-  if (!name || !date || !location) {
-    return res.status(400).json({ message: 'name, date, and location are required' });
-  }
-
-  try {
-    const [result] = await pool.query(
-      'UPDATE events SET name = ?, event_date = ?, location = ?, courses = ?, categories = ? WHERE id = ?',
-      [name, date, location, JSON.stringify(normalizedCourses), JSON.stringify(normalizedCategories), eventId]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'event not found' });
+    if (existingEvent && !overwrite) {
+      return res.status(409).json({
+        message: 'Event already exists. Confirm overwrite to continue.',
+        exists: true
+      });
     }
 
-    const [rows] = await pool.query(
-      `SELECT id, name, DATE_FORMAT(event_date, '%Y-%m-%d') AS date, location, courses, categories
+    let eventId;
+
+    if (existingEvent) {
+      await pool.query(
+        `UPDATE events
+         SET date = ?, organiser = ?, duration_hours = ?, year = ?, series = ?, name = ?
+         WHERE id = ?`,
+        [date, organiser, durationHours, eventYear, series, name, existingEvent.id]
+      );
+      eventId = existingEvent.id;
+    } else {
+      const [insertResult] = await pool.query(
+        `INSERT INTO events (
+          name,
+          year,
+          series,
+          date,
+          organiser,
+          duration_hours
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [name, eventYear, series, date, organiser, durationHours]
+      );
+      eventId = insertResult.insertId;
+    }
+
+    const [savedRows] = await pool.query(
+      `SELECT
+        id,
+        year,
+        series,
+        name,
+        DATE_FORMAT(date, '%Y-%m-%d') AS date,
+        organiser,
+        duration_hours AS duration
        FROM events
        WHERE id = ?`,
       [eventId]
     );
 
-    res.json(mapEventRow(rows[0]));
+    return res.json({
+      message: existingEvent ? 'Event overwritten successfully.' : 'Event saved successfully.',
+      event: savedRows[0]
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-router.delete('/:id', async (req, res) => {
-  const eventId = Number(req.params.id);
-
-  if (!Number.isInteger(eventId) || eventId <= 0) {
-    return res.status(400).json({ message: 'invalid event id' });
-  }
-
-  try {
-    const [result] = await pool.query('DELETE FROM events WHERE id = ?', [eventId]);
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'event not found' });
+    if (error.code === 'ER_BAD_FIELD_ERROR') {
+      return res.status(500).json({
+        message: 'events table schema is missing required columns. Run backend/sql/init.sql first.'
+      });
     }
 
-    res.status(204).send();
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 });
 

@@ -45,7 +45,7 @@ function parseWeightingTable(rawTable) {
 }
 
 const weightingTable = parseWeightingTable(weightingTableConfig);
-const currentView = ref('events');
+const currentView = ref('json-loader');
 const loading = ref(false);
 const errorMessage = ref('');
 const events = ref([]);
@@ -55,6 +55,9 @@ const usersErrorMessage = ref('');
 const jsonLoadErrorMessage = ref('');
 const jsonLoadData = ref(null);
 const jsonLoadLoading = ref(false);
+const saveEventLoading = ref(false);
+const saveEventErrorMessage = ref('');
+const saveEventSuccessMessage = ref('');
 const eventsIndex = ref([]);
 const eventsIndexLoading = ref(false);
 const eventsIndexErrorMessage = ref('');
@@ -359,12 +362,7 @@ function userKey(user) {
 function switchView(view) {
   currentView.value = view;
 
-  if (view === 'users') {
-    closeTeamsView();
-    fetchUsers();
-  } else if (view === 'events') {
-    fetchEvents();
-  } else if (view === 'json-loader') {
+  if (view === 'json-loader') {
     closeTeamsView();
     fetchEventsIndex();
   } else {
@@ -621,6 +619,64 @@ function applyCategoryMappingAndTransform() {
   transformLoadedJson();
 }
 
+async function saveSelectedEvent(overwrite = false) {
+  saveEventErrorMessage.value = '';
+  saveEventSuccessMessage.value = '';
+
+  if (!jsonLoadData.value || !selectedEventDetails.value) {
+    saveEventErrorMessage.value = 'Load results and select an event before saving.';
+    return;
+  }
+
+  const payload = {
+    year: Number(selectedEventYear.value),
+    series: String(selectedEventSeries.value || '').trim(),
+    name: String(selectedEventDetails.value.title || '').trim(),
+    date: String(jsonLoadData.value.start_date || '').trim(),
+    organiser: String(jsonLoadData.value.organiser || '').trim(),
+    duration: Number(jsonLoadData.value.event_duration),
+    overwrite
+  };
+
+  if (!payload.year || !payload.series || !payload.name || !payload.date || !payload.organiser || Number.isNaN(payload.duration)) {
+    saveEventErrorMessage.value = 'Missing required event details to save.';
+    return;
+  }
+
+  saveEventLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/events/save-result`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.status === 409 && !overwrite) {
+      const shouldOverwrite = window.confirm('Event already exists. Overwrite existing event details?');
+      if (shouldOverwrite) {
+        saveEventLoading.value = false;
+        await saveSelectedEvent(true);
+      }
+      return;
+    }
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to save event details');
+    }
+
+    const data = await response.json();
+    saveEventSuccessMessage.value = data.message || 'Event saved successfully.';
+  } catch (error) {
+    saveEventErrorMessage.value = error.message || 'Failed to save event details';
+  } finally {
+    saveEventLoading.value = false;
+  }
+}
+
 async function loadSelectedEventJson() {
   const url = selectedEventResultsUrl.value;
   if (!url) {
@@ -644,12 +700,16 @@ async function loadSelectedEventJson() {
     transformErrorMessage.value = '';
     transformedRows.value = [];
     transformedColumns.value = [];
+    saveEventErrorMessage.value = '';
+    saveEventSuccessMessage.value = '';
   } catch (error) {
     jsonLoadErrorMessage.value = error.message || 'Failed to load results';
     jsonLoadData.value = null;
     transformErrorMessage.value = '';
     transformedRows.value = [];
     transformedColumns.value = [];
+    saveEventErrorMessage.value = '';
+    saveEventSuccessMessage.value = '';
   } finally {
     jsonLoadLoading.value = false;
   }
@@ -1110,7 +1170,7 @@ async function deleteEvent(id) {
 }
 
 onMounted(() => {
-  fetchEvents();
+  fetchEventsIndex();
 });
 </script>
 
@@ -1119,217 +1179,10 @@ onMounted(() => {
     <h1>Rogainizer</h1>
 
     <div class="view-switcher">
-      <button type="button" :class="{ active: currentView === 'events' }" @click="switchView('events')">Events</button>
-      <button type="button" :class="{ active: currentView === 'users' }" @click="switchView('users')">Users</button>
       <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
     </div>
 
-    <template v-if="currentView === 'events'">
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="loading">Loading events...</p>
-
-      <table v-if="!loading && !selectedTeamsEvent" class="events-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Date</th>
-          <th>Location</th>
-          <th>Courses</th>
-          <th>Categories</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>
-            <input v-model="newEvent.name" type="text" placeholder="Event name" />
-          </td>
-          <td>
-            <input v-model="newEvent.date" type="date" />
-          </td>
-          <td>
-            <input v-model="newEvent.location" type="text" placeholder="Event location" />
-          </td>
-          <td>
-            <input v-model="newEvent.courses" type="text" placeholder="6hr, 12hr" />
-          </td>
-          <td>
-            <input v-model="newEvent.categories" type="text" placeholder="MO, WO, XO" />
-          </td>
-          <td class="actions-cell">
-            <button type="button" @click="addEvent">Add</button>
-          </td>
-        </tr>
-
-        <tr v-for="eventItem in events" :key="eventItem.id">
-          <td v-if="editingEventId === eventItem.id">
-            <input v-model="editForm.name" type="text" />
-          </td>
-          <td v-else>{{ eventItem.name }}</td>
-
-          <td v-if="editingEventId === eventItem.id">
-            <input v-model="editForm.date" type="date" />
-          </td>
-          <td v-else>{{ eventItem.date }}</td>
-
-          <td v-if="editingEventId === eventItem.id">
-            <input v-model="editForm.location" type="text" />
-          </td>
-          <td v-else>{{ eventItem.location }}</td>
-
-          <td v-if="editingEventId === eventItem.id">
-            <input v-model="editForm.courses" type="text" placeholder="6hr, 12hr" />
-          </td>
-          <td v-else>{{ eventItem.courses?.join(', ') || '-' }}</td>
-
-          <td v-if="editingEventId === eventItem.id">
-            <input v-model="editForm.categories" type="text" placeholder="MO, WO, XO" />
-          </td>
-          <td v-else>{{ eventItem.categories?.join(', ') || '-' }}</td>
-
-          <td class="actions-cell">
-            <template v-if="editingEventId === eventItem.id">
-              <button type="button" @click="saveEdit(eventItem.id)">Save</button>
-              <button type="button" @click="cancelEdit">Cancel</button>
-            </template>
-            <template v-else>
-              <button type="button" @click="startEdit(eventItem)">Edit</button>
-              <button type="button" @click="deleteEvent(eventItem.id)">Delete</button>
-              <button type="button" @click="openTeams(eventItem)">Teams</button>
-            </template>
-          </td>
-        </tr>
-
-        <tr v-if="events.length === 0">
-          <td colspan="6" class="empty-state">No events yet.</td>
-        </tr>
-      </tbody>
-      </table>
-
-      <section v-if="selectedTeamsEvent" class="teams-section">
-      <button type="button" class="back-button" @click="closeTeamsView">Back to Events</button>
-      <h2>Teams - {{ selectedTeamsEvent.name }}</h2>
-      <p class="teams-subtitle">Add teams for this event.</p>
-      <div class="teams-sort-controls">
-        <label>
-          Sort by
-          <select v-model="teamSortBy">
-            <option value="score">Score</option>
-            <option value="course">Course</option>
-            <option value="category">Category</option>
-          </select>
-        </label>
-        <label>
-          Direction
-          <select v-model="teamSortDirection">
-            <option value="desc">Descending</option>
-            <option value="asc">Ascending</option>
-          </select>
-        </label>
-      </div>
-      <p v-if="teamsErrorMessage" class="error">{{ teamsErrorMessage }}</p>
-      <p v-if="teamsLoading">Loading teams...</p>
-
-      <table v-if="!teamsLoading" class="teams-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Competitors (comma separated)</th>
-            <th>Course</th>
-            <th>Category</th>
-            <th>Score</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              <input v-model="newTeam.name" type="text" placeholder="Team name" />
-            </td>
-            <td>
-              <input v-model="newTeam.competitors" type="text" placeholder="Alice, Bob" />
-            </td>
-            <td>
-              <select v-model="newTeam.course">
-                <option value="" disabled>Select course</option>
-                <option v-for="courseOption in selectedEventCourses()" :key="`new-course-${courseOption}`" :value="courseOption">
-                  {{ courseOption }}
-                </option>
-              </select>
-            </td>
-            <td>
-              <select v-model="newTeam.category">
-                <option value="" disabled>Select category</option>
-                <option v-for="categoryOption in selectedEventCategories()" :key="`new-category-${categoryOption}`" :value="categoryOption">
-                  {{ categoryOption }}
-                </option>
-              </select>
-            </td>
-            <td>
-              <input v-model="newTeam.score" type="number" min="0" step="0.01" placeholder="0" />
-            </td>
-            <td class="actions-cell">
-              <button type="button" @click="addTeam">Add</button>
-            </td>
-          </tr>
-
-          <tr v-for="teamItem in sortedTeams" :key="teamItem.id">
-            <td v-if="editingTeamId === teamItem.id">
-              <input v-model="editTeamForm.name" type="text" />
-            </td>
-            <td v-else>{{ teamItem.name }}</td>
-
-            <td v-if="editingTeamId === teamItem.id">
-              <input v-model="editTeamForm.competitors" type="text" />
-            </td>
-            <td v-else>{{ teamItem.competitors }}</td>
-
-            <td v-if="editingTeamId === teamItem.id">
-              <select v-model="editTeamForm.course">
-                <option value="" disabled>Select course</option>
-                <option v-for="courseOption in selectedEventCourses()" :key="`edit-course-${teamItem.id}-${courseOption}`" :value="courseOption">
-                  {{ courseOption }}
-                </option>
-              </select>
-            </td>
-            <td v-else>{{ teamItem.course }}</td>
-
-            <td v-if="editingTeamId === teamItem.id">
-              <select v-model="editTeamForm.category">
-                <option value="" disabled>Select category</option>
-                <option v-for="categoryOption in selectedEventCategories()" :key="`edit-category-${teamItem.id}-${categoryOption}`" :value="categoryOption">
-                  {{ categoryOption }}
-                </option>
-              </select>
-            </td>
-            <td v-else>{{ teamItem.category }}</td>
-
-            <td v-if="editingTeamId === teamItem.id">
-              <input v-model="editTeamForm.score" type="number" min="0" step="0.01" />
-            </td>
-            <td v-else>{{ teamItem.score }}</td>
-
-            <td class="actions-cell">
-              <template v-if="editingTeamId === teamItem.id">
-                <button type="button" @click="saveTeamEdit(teamItem.id)">Save</button>
-                <button type="button" @click="cancelTeamEdit">Cancel</button>
-              </template>
-              <template v-else>
-                <button type="button" @click="startTeamEdit(teamItem)">Edit</button>
-                <button type="button" @click="deleteTeam(teamItem.id)">Delete</button>
-              </template>
-            </td>
-          </tr>
-
-          <tr v-if="sortedTeams.length === 0">
-            <td colspan="6" class="empty-state">No teams yet for this event.</td>
-          </tr>
-        </tbody>
-      </table>
-      </section>
-    </template>
-
-    <template v-else-if="currentView === 'users'">
+    <template v-if="currentView === 'users'">
       <p v-if="usersErrorMessage" class="error">{{ usersErrorMessage }}</p>
       <p v-if="usersLoading">Loading users...</p>
 
@@ -1417,11 +1270,16 @@ onMounted(() => {
         <button type="button" @click="loadSelectedEventJson" :disabled="jsonLoadLoading || !selectedEventResultsUrl">
           {{ jsonLoadLoading ? 'Loading...' : 'Load' }}
         </button>
+        <button type="button" @click="saveSelectedEvent()" :disabled="saveEventLoading || jsonLoadData === null">
+          {{ saveEventLoading ? 'Saving...' : 'Save Event' }}
+        </button>
         <p v-if="selectedEventResultsUrl" class="json-loader-url">{{ selectedEventResultsUrl }}</p>
         <button type="button" @click="openCategoryMappingDialog" :disabled="jsonLoadLoading || jsonLoadData === null">
           Transform
         </button>
         <p v-if="jsonLoadErrorMessage" class="error">{{ jsonLoadErrorMessage }}</p>
+        <p v-if="saveEventErrorMessage" class="error">{{ saveEventErrorMessage }}</p>
+        <p v-if="saveEventSuccessMessage" class="success">{{ saveEventSuccessMessage }}</p>
         <p v-if="transformErrorMessage" class="error">{{ transformErrorMessage }}</p>
 
         <div v-if="jsonLoadData !== null" class="json-panels">
@@ -1594,6 +1452,10 @@ button {
 
 .error {
   color: #b00020;
+}
+
+.success {
+  color: #0b6e2e;
 }
 
 .empty-state {
