@@ -65,6 +65,9 @@ const transformErrorMessage = ref('');
 const transformedRows = ref([]);
 const transformedColumns = ref([]);
 const transformedDisplayMode = ref('raw');
+const showCategoryMappingDialog = ref(false);
+const categoryMappingRows = ref([]);
+const categoryMappingErrorMessage = ref('');
 const fixedCategoryColumns = ['MJ', 'WJ', 'XJ', 'MO', 'WO', 'XO', 'MV', 'WV', 'XV', 'MSV', 'WSV', 'XSV', 'MUV', 'WUV', 'XUV'];
 const teams = ref([]);
 const teamsLoading = ref(false);
@@ -479,6 +482,33 @@ function parseTeamNameAndMembers(rawName) {
   };
 }
 
+function normalizeRawTeamCategory(value) {
+  let normalized = String(value || '').trim().toUpperCase();
+  normalized = normalized.replace(/[\s:;]*\d+$/g, '').trim();
+  normalized = normalized.replace(/[:;]+$/g, '').trim();
+  return normalized;
+}
+
+function extractNormalizedTeamCategories(value) {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) {
+    return [];
+  }
+
+  const groupedPattern = /[^,;]+?\d+(?=\s+[^,;]+?\d+|$|[,;])/g;
+  const groupedMatches = rawValue.match(groupedPattern);
+
+  const rawCategories = groupedMatches && groupedMatches.length > 0
+    ? groupedMatches
+    : rawValue.split(/[;,]+/).map((token) => token.trim()).filter(Boolean);
+
+  return [...new Set(
+    rawCategories
+      .map((token) => normalizeRawTeamCategory(token))
+      .filter(Boolean)
+  )];
+}
+
 function transformLoadedJson() {
   transformErrorMessage.value = '';
   transformedRows.value = [];
@@ -500,12 +530,26 @@ function transformLoadedJson() {
 
   const rows = [];
 
+  const categoryMapping = new Map(
+    fixedCategoryColumns.map((category) => [normalizeRawTeamCategory(category), category])
+  );
+
+  for (const row of categoryMappingRows.value) {
+    const rawCategory = normalizeRawTeamCategory(row?.rawCategory);
+    const mappedCategory = normalizeRawTeamCategory(row?.mappedCategory);
+
+    if (rawCategory && mappedCategory) {
+      categoryMapping.set(rawCategory, mappedCategory);
+    }
+  }
+
   for (const team of teamsData) {
     const { teamName, members } = parseTeamNameAndMembers(team?.name);
     const finalScore = team?.final_score ?? null;
-    const teamCategories = new Set(
-      (Array.isArray(team?.categories) ? team.categories : [])
-        .map((category) => String(category).trim())
+    const rawTeamCategories = extractNormalizedTeamCategories(team?.category);
+    const mappedTeamCategories = new Set(
+      rawTeamCategories
+        .map((rawCategory) => categoryMapping.get(rawCategory) || '')
         .filter(Boolean)
     );
 
@@ -517,7 +561,7 @@ function transformLoadedJson() {
       };
 
       for (const category of categories) {
-        row[category] = teamCategories.has(category) ? finalScore : '';
+        row[category] = mappedTeamCategories.has(category) ? finalScore : '';
       }
 
       rows.push(row);
@@ -526,6 +570,55 @@ function transformLoadedJson() {
 
   transformedColumns.value = ['team_name', 'team_member', 'final_score', ...fixedCategoryColumns];
   transformedRows.value = rows;
+}
+
+function openCategoryMappingDialog() {
+  transformErrorMessage.value = '';
+  categoryMappingErrorMessage.value = '';
+
+  if (!jsonLoadData.value || typeof jsonLoadData.value !== 'object') {
+    transformErrorMessage.value = 'Load results data first.';
+    return;
+  }
+
+  const rawGrades = Array.isArray(jsonLoadData.value.event_grades)
+    ? jsonLoadData.value.event_grades.map((grade) => String(grade).trim()).filter(Boolean)
+    : [];
+
+  if (rawGrades.length === 0) {
+    transformErrorMessage.value = 'No event_grades found in loaded results.';
+    return;
+  }
+
+  categoryMappingRows.value = rawGrades.map((grade) => ({
+    rawCategory: grade,
+    mappedCategory: fixedCategoryColumns.includes(normalizeRawTeamCategory(grade))
+      ? normalizeRawTeamCategory(grade)
+      : ''
+  }));
+
+  showCategoryMappingDialog.value = true;
+}
+
+function closeCategoryMappingDialog() {
+  categoryMappingErrorMessage.value = '';
+  showCategoryMappingDialog.value = false;
+}
+
+function applyCategoryMappingAndTransform() {
+  const selectedMappings = categoryMappingRows.value
+    .map((row) => normalizeRawTeamCategory(row?.mappedCategory))
+    .filter(Boolean);
+
+  const uniqueMappings = new Set(selectedMappings);
+  if (uniqueMappings.size !== selectedMappings.length) {
+    categoryMappingErrorMessage.value = 'Duplicate mapped categories are not allowed (except Unmapped).';
+    return;
+  }
+
+  categoryMappingErrorMessage.value = '';
+  showCategoryMappingDialog.value = false;
+  transformLoadedJson();
 }
 
 async function loadSelectedEventJson() {
@@ -1325,7 +1418,7 @@ onMounted(() => {
           {{ jsonLoadLoading ? 'Loading...' : 'Load' }}
         </button>
         <p v-if="selectedEventResultsUrl" class="json-loader-url">{{ selectedEventResultsUrl }}</p>
-        <button type="button" @click="transformLoadedJson" :disabled="jsonLoadLoading || jsonLoadData === null">
+        <button type="button" @click="openCategoryMappingDialog" :disabled="jsonLoadLoading || jsonLoadData === null">
           Transform
         </button>
         <p v-if="jsonLoadErrorMessage" class="error">{{ jsonLoadErrorMessage }}</p>
@@ -1373,6 +1466,41 @@ onMounted(() => {
           </div>
         </div>
       </section>
+
+      <div v-if="showCategoryMappingDialog" class="dialog-backdrop">
+        <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Category mapping">
+          <h3>Category Mapping</h3>
+          <p>Map raw categories to transformed categories before running transform.</p>
+
+          <table class="events-table mapping-table">
+            <thead>
+              <tr>
+                <th>Raw Category</th>
+                <th>Mapped Category</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, rowIndex) in categoryMappingRows" :key="`mapping-row-${rowIndex}`">
+                <td>{{ row.rawCategory }}</td>
+                <td>
+                  <select v-model="row.mappedCategory">
+                    <option value="">Unmapped</option>
+                    <option v-for="category in fixedCategoryColumns" :key="`map-option-${rowIndex}-${category}`" :value="category">
+                      {{ category }}
+                    </option>
+                  </select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="mapping-dialog-actions">
+            <p v-if="categoryMappingErrorMessage" class="error mapping-dialog-error">{{ categoryMappingErrorMessage }}</p>
+            <button type="button" @click="closeCategoryMappingDialog">Cancel</button>
+            <button type="button" @click="applyCategoryMappingAndTransform">Apply</button>
+          </div>
+        </div>
+      </div>
     </template>
   </main>
 </template>
@@ -1514,6 +1642,43 @@ button {
 
 .events-table td.scaled-score-cell {
   text-align: right;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 1000;
+}
+
+.mapping-dialog {
+  background: #fff;
+  color: #111;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  padding: 1rem;
+  width: min(760px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.mapping-table {
+  margin: 0.75rem 0;
+}
+
+.mapping-dialog-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.mapping-dialog-error {
+  margin-right: auto;
 }
 
 .json-output-panel {
