@@ -3,6 +3,48 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import JsonTreeNode from './components/JsonTreeNode.vue';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+const weightingTableConfig = import.meta.env.VITE_SCALE_WEIGHTING_TABLE || '';
+
+function parseWeightingTable(rawTable) {
+  const defaultTable = [
+    { duration: 24, weighting: 1.2 },
+    { duration: 12, weighting: 1.0 },
+    { duration: 6, weighting: 0.8 },
+    { duration: 3, weighting: 0.6 },
+    { duration: 2, weighting: 0.5 },
+    { duration: 0, weighting: 0.3 }
+  ];
+
+  const raw = String(rawTable || '').trim();
+  if (!raw) {
+    return defaultTable;
+  }
+
+  const parsed = raw
+    .split(/\s*[;|\n]\s*/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const parts = entry.split(/[,:]/).map((part) => part.trim()).filter(Boolean);
+      if (parts.length < 2) {
+        return null;
+      }
+
+      const duration = Number(parts[0]);
+      const weighting = Number(parts[1]);
+
+      if (!Number.isFinite(duration) || !Number.isFinite(weighting)) {
+        return null;
+      }
+
+      return { duration, weighting };
+    })
+    .filter(Boolean);
+
+  return parsed.length > 0 ? parsed : defaultTable;
+}
+
+const weightingTable = parseWeightingTable(weightingTableConfig);
 const currentView = ref('events');
 const loading = ref(false);
 const errorMessage = ref('');
@@ -22,6 +64,8 @@ const selectedEventTitle = ref('');
 const transformErrorMessage = ref('');
 const transformedRows = ref([]);
 const transformedColumns = ref([]);
+const transformedDisplayMode = ref('raw');
+const fixedCategoryColumns = ['MJ', 'WJ', 'XJ', 'MO', 'WO', 'XO', 'MV', 'WV', 'XV', 'MSV', 'WSV', 'XSV', 'MUV', 'WUV', 'XUV'];
 const teams = ref([]);
 const teamsLoading = ref(false);
 const teamsErrorMessage = ref('');
@@ -181,6 +225,78 @@ const selectedEventResultsUrl = computed(() => {
   return `https://rogaine-results.com/${year}/${eventNameSlug}/${eventCourseSlug}/results.json`;
 });
 
+const scaledColumns = computed(() =>
+  transformedColumns.value.filter((column) => column !== 'team_name' && column !== 'team_member')
+);
+
+const scaledColumnMax = computed(() => {
+  const maxByColumn = {};
+
+  for (const column of scaledColumns.value) {
+    let maxValue = 0;
+
+    for (const row of transformedRows.value) {
+      const numericValue = Number(row[column]);
+      if (Number.isFinite(numericValue) && numericValue > maxValue) {
+        maxValue = numericValue;
+      }
+    }
+
+    maxByColumn[column] = maxValue;
+  }
+
+  return maxByColumn;
+});
+
+const scaledRows = computed(() =>
+  transformedRows.value.map((row) => {
+    const scaledRow = { ...row };
+
+    for (const column of scaledColumns.value) {
+      const maxValue = scaledColumnMax.value[column];
+      const numericValue = Number(row[column]);
+
+      if (!Number.isFinite(numericValue)) {
+        scaledRow[column] = row[column];
+      } else if (numericValue === 0) {
+        scaledRow[column] = '';
+      } else if (maxValue > 0) {
+        const percentage = (numericValue / maxValue) * 100;
+        const weightedPercentage = percentage * selectedDurationWeighting.value;
+        scaledRow[column] = Math.ceil(weightedPercentage);
+      } else {
+        scaledRow[column] = '';
+      }
+    }
+
+    return scaledRow;
+  })
+);
+
+const displayedTransformedRows = computed(() =>
+  transformedDisplayMode.value === 'scaled' ? scaledRows.value : transformedRows.value
+);
+
+const selectedEventDuration = computed(() => {
+  const duration = Number(jsonLoadData.value?.event_duration);
+  return Number.isFinite(duration) ? duration : null;
+});
+
+const selectedDurationWeighting = computed(() => {
+  const duration = selectedEventDuration.value;
+  if (duration === null) {
+    return 1;
+  }
+
+  for (const item of weightingTable) {
+    if (duration >= item.duration) {
+      return item.weighting;
+    }
+  }
+
+  return weightingTable.at(-1)?.weighting ?? 1;
+});
+
 watch(filteredEventSeries, (options) => {
   if (!options.includes(selectedEventSeries.value)) {
     selectedEventSeries.value = '';
@@ -211,6 +327,22 @@ function listToCommaText(value) {
 
 function selectedEventCourses() {
   return normalizeList(selectedTeamsEvent.value?.courses || []);
+}
+
+function transformedColumnLabel(column) {
+  if (column === 'team_name') {
+    return 'Team';
+  }
+
+  if (column === 'team_member') {
+    return 'Member';
+  }
+
+  if (column === 'final_score') {
+    return 'Score';
+  }
+
+  return column;
 }
 
 function selectedEventCategories() {
@@ -350,19 +482,14 @@ function parseTeamNameAndMembers(rawName) {
 function transformLoadedJson() {
   transformErrorMessage.value = '';
   transformedRows.value = [];
+  transformedDisplayMode.value = 'raw';
 
   if (!jsonLoadData.value || typeof jsonLoadData.value !== 'object') {
     transformErrorMessage.value = 'Load JSON data first.';
     return;
   }
 
-  const categorySource = Array.isArray(jsonLoadData.value.categories)
-    ? jsonLoadData.value.categories
-    : Array.isArray(jsonLoadData.value.event_grades)
-      ? jsonLoadData.value.event_grades
-      : [];
-
-  const categories = categorySource.map((category) => String(category).trim()).filter(Boolean);
+  const categories = fixedCategoryColumns;
 
   const teamsData = Array.isArray(jsonLoadData.value.teams) ? jsonLoadData.value.teams : [];
 
@@ -397,7 +524,7 @@ function transformLoadedJson() {
     }
   }
 
-  transformedColumns.value = ['team_name', 'team_member', 'final_score', ...categories];
+  transformedColumns.value = ['team_name', 'team_member', 'final_score', ...fixedCategoryColumns];
   transformedRows.value = rows;
 }
 
@@ -1212,15 +1339,33 @@ onMounted(() => {
 
           <div class="json-output-panel transformed-output-panel">
             <h3>Transformed Data</h3>
+            <div v-if="transformedRows.length > 0" class="transformed-mode-switch">
+              <label>
+                <input v-model="transformedDisplayMode" type="radio" value="raw" />
+                Raw
+              </label>
+              <label>
+                <input v-model="transformedDisplayMode" type="radio" value="scaled" />
+                Scaled
+              </label>
+            </div>
             <table v-if="transformedRows.length > 0" class="events-table transformed-table">
               <thead>
                 <tr>
-                  <th v-for="column in transformedColumns" :key="`transform-header-${column}`">{{ column }}</th>
+                  <th v-for="column in transformedColumns" :key="`transform-header-${column}`">{{ transformedColumnLabel(column) }}</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(row, rowIndex) in transformedRows" :key="`transform-row-${rowIndex}`">
-                  <td v-for="column in transformedColumns" :key="`transform-cell-${rowIndex}-${column}`">{{ row[column] }}</td>
+                <tr v-for="(row, rowIndex) in displayedTransformedRows" :key="`transform-row-${rowIndex}`">
+                  <td
+                    v-for="column in transformedColumns"
+                    :key="`transform-cell-${rowIndex}-${column}`"
+                    :class="{
+                      'scaled-score-cell': transformedDisplayMode === 'scaled' && column !== 'team_name' && column !== 'team_member'
+                    }"
+                  >
+                    {{ row[column] }}
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1352,6 +1497,23 @@ button {
 .json-loader-url {
   margin: 0.5rem 0;
   word-break: break-all;
+}
+
+.transformed-mode-switch {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.transformed-mode-switch label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.events-table td.scaled-score-cell {
+  text-align: right;
 }
 
 .json-output-panel {
