@@ -3,6 +3,17 @@ import pool from '../config/db.js';
 
 const router = Router();
 
+const fixedCategoryColumns = ['MJ', 'WJ', 'XJ', 'MO', 'WO', 'XO', 'MV', 'WV', 'XV', 'MSV', 'WSV', 'XSV', 'MUV', 'WUV', 'XUV'];
+
+function toNullableNumber(value) {
+  if (value === '' || value === null || value === undefined) {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
 router.get('/', async (_req, res) => {
   try {
     const [rows] = await pool.query(
@@ -121,6 +132,100 @@ router.post('/save-result', async (req, res) => {
     }
 
     return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/:eventId/transformed-results', async (req, res) => {
+  const eventId = Number(req.params.eventId);
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return res.status(400).json({ message: 'eventId must be a positive integer' });
+  }
+
+  if (rows.length === 0) {
+    return res.status(400).json({ message: 'rows must be a non-empty array' });
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [eventRows] = await connection.query('SELECT id FROM events WHERE id = ? LIMIT 1', [eventId]);
+    if (!eventRows[0]) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Event not found. Save event details first.' });
+    }
+
+    await connection.query('DELETE FROM results WHERE event_id = ?', [eventId]);
+
+    const insertSql = `INSERT INTO results (
+      event_id,
+      team_name,
+      team_member,
+      final_score_raw,
+      final_score_scaled,
+      mj_raw, mj_scaled,
+      wj_raw, wj_scaled,
+      xj_raw, xj_scaled,
+      mo_raw, mo_scaled,
+      wo_raw, wo_scaled,
+      xo_raw, xo_scaled,
+      mv_raw, mv_scaled,
+      wv_raw, wv_scaled,
+      xv_raw, xv_scaled,
+      msv_raw, msv_scaled,
+      wsv_raw, wsv_scaled,
+      xsv_raw, xsv_scaled,
+      muv_raw, muv_scaled,
+      wuv_raw, wuv_scaled,
+      xuv_raw, xuv_scaled
+    ) VALUES (
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )`;
+
+    for (const row of rows) {
+      const raw = row?.raw || {};
+      const scaled = row?.scaled || {};
+
+      const teamName = String(row?.team_name || '').trim();
+      const teamMember = String(row?.team_member || '').trim();
+
+      if (!teamName || !teamMember) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'Each row must include team_name and team_member.' });
+      }
+
+      const values = [
+        eventId,
+        teamName,
+        teamMember,
+        toNullableNumber(raw.final_score),
+        toNullableNumber(scaled.final_score)
+      ];
+
+      for (const category of fixedCategoryColumns) {
+        values.push(toNullableNumber(raw[category]));
+        values.push(toNullableNumber(scaled[category]));
+      }
+
+      await connection.query(insertSql, values);
+    }
+
+    await connection.commit();
+
+    return res.json({
+      message: 'Transformed results saved successfully.',
+      eventId,
+      rowsSaved: rows.length
+    });
+  } catch (error) {
+    await connection.rollback();
+    return res.status(500).json({ message: error.message });
+  } finally {
+    connection.release();
   }
 });
 

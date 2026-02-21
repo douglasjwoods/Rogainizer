@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import JsonTreeNode from './components/JsonTreeNode.vue';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
@@ -45,19 +45,16 @@ function parseWeightingTable(rawTable) {
 }
 
 const weightingTable = parseWeightingTable(weightingTableConfig);
-const currentView = ref('json-loader');
-const loading = ref(false);
-const errorMessage = ref('');
-const events = ref([]);
-const users = ref([]);
-const usersLoading = ref(false);
-const usersErrorMessage = ref('');
 const jsonLoadErrorMessage = ref('');
 const jsonLoadData = ref(null);
 const jsonLoadLoading = ref(false);
 const saveEventLoading = ref(false);
 const saveEventErrorMessage = ref('');
 const saveEventSuccessMessage = ref('');
+const savedEventId = ref(null);
+const saveTransformedLoading = ref(false);
+const saveTransformedErrorMessage = ref('');
+const saveTransformedSuccessMessage = ref('');
 const eventsIndex = ref([]);
 const eventsIndexLoading = ref(false);
 const eventsIndexErrorMessage = ref('');
@@ -72,84 +69,6 @@ const showCategoryMappingDialog = ref(false);
 const categoryMappingRows = ref([]);
 const categoryMappingErrorMessage = ref('');
 const fixedCategoryColumns = ['MJ', 'WJ', 'XJ', 'MO', 'WO', 'XO', 'MV', 'WV', 'XV', 'MSV', 'WSV', 'XSV', 'MUV', 'WUV', 'XUV'];
-const teams = ref([]);
-const teamsLoading = ref(false);
-const teamsErrorMessage = ref('');
-const selectedTeamsEvent = ref(null);
-const teamSortBy = ref('score');
-const teamSortDirection = ref('desc');
-
-const newEvent = reactive({
-  name: '',
-  date: '',
-  location: '',
-  courses: '',
-  categories: ''
-});
-
-const editingEventId = ref(null);
-const editForm = reactive({
-  name: '',
-  date: '',
-  location: '',
-  courses: '',
-  categories: ''
-});
-
-const newUser = reactive({
-  name: '',
-  email: ''
-});
-
-const editingUserKey = ref(null);
-const editUserForm = reactive({
-  name: '',
-  email: ''
-});
-
-const newTeam = reactive({
-  name: '',
-  competitors: '',
-  course: '',
-  category: '',
-  score: ''
-});
-
-const editingTeamId = ref(null);
-const editTeamForm = reactive({
-  name: '',
-  competitors: '',
-  course: '',
-  category: '',
-  score: ''
-});
-
-const sortedTeams = computed(() => {
-  const items = [...teams.value];
-  const directionFactor = teamSortDirection.value === 'asc' ? 1 : -1;
-
-  items.sort((left, right) => {
-    if (teamSortBy.value === 'score') {
-      const leftScore = Number(left.score);
-      const rightScore = Number(right.score);
-      if (leftScore === rightScore) {
-        return left.id - right.id;
-      }
-      return (leftScore - rightScore) * directionFactor;
-    }
-
-    const leftValue = String(left[teamSortBy.value] || '').toLowerCase();
-    const rightValue = String(right[teamSortBy.value] || '').toLowerCase();
-
-    if (leftValue === rightValue) {
-      return left.id - right.id;
-    }
-
-    return leftValue.localeCompare(rightValue) * directionFactor;
-  });
-
-  return items;
-});
 
 const filteredEventSeries = computed(() => {
   const targetYear = String(selectedEventYear.value || '').trim();
@@ -315,26 +234,6 @@ watch(filteredEvents, (options) => {
   }
 });
 
-function normalizeList(value) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
-}
-
-function parseCommaList(value) {
-  return normalizeList(String(value || '').split(','));
-}
-
-function listToCommaText(value) {
-  return normalizeList(value).join(', ');
-}
-
-function selectedEventCourses() {
-  return normalizeList(selectedTeamsEvent.value?.courses || []);
-}
-
 function transformedColumnLabel(column) {
   if (column === 'team_name') {
     return 'Team';
@@ -349,25 +248,6 @@ function transformedColumnLabel(column) {
   }
 
   return column;
-}
-
-function selectedEventCategories() {
-  return normalizeList(selectedTeamsEvent.value?.categories || []);
-}
-
-function userKey(user) {
-  return `${user.name}::${user.email}`;
-}
-
-function switchView(view) {
-  currentView.value = view;
-
-  if (view === 'json-loader') {
-    closeTeamsView();
-    fetchEventsIndex();
-  } else {
-    closeTeamsView();
-  }
 }
 
 async function fetchEventsIndex() {
@@ -398,7 +278,7 @@ async function fetchEventsIndex() {
   }
 }
 
-function normalizeNameValue(value) {
+function normalizeTeamMemberName(value) {
   const collapsed = String(value || '').trim().replace(/\s+/g, ' ');
   if (!collapsed) {
     return '';
@@ -419,7 +299,13 @@ function normalizeNameValue(value) {
   return collapsed
     .toLowerCase()
     .split(' ')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word) => word
+      .split('-')
+      .map((hyphenPart) => hyphenPart
+        .split("'")
+        .map((apostrophePart) => apostrophePart.charAt(0).toUpperCase() + apostrophePart.slice(1))
+        .join("'"))
+      .join('-'))
     .join(' ');
 }
 
@@ -428,11 +314,11 @@ function parseTeamNameAndMembers(rawName) {
   const separatorIndex = fullName.indexOf(';');
 
   if (separatorIndex >= 0) {
-    const teamName = normalizeNameValue(fullName.slice(0, separatorIndex));
+    const teamName = normalizeTeamMemberName(fullName.slice(0, separatorIndex));
     const membersText = fullName.slice(separatorIndex + 1);
     const members = membersText
       .split(',')
-      .map((member) => normalizeNameValue(member))
+      .map((member) => normalizeTeamMemberName(member))
       .filter(Boolean);
 
     return {
@@ -443,11 +329,11 @@ function parseTeamNameAndMembers(rawName) {
 
   const colonIndex = fullName.indexOf(':');
   if (colonIndex >= 0) {
-    const teamName = normalizeNameValue(fullName.slice(0, colonIndex));
+    const teamName = normalizeTeamMemberName(fullName.slice(0, colonIndex));
     const membersText = fullName.slice(colonIndex + 1);
     const members = membersText
       .split(',')
-      .map((member) => normalizeNameValue(member.replace(/[.)]+$/g, '')))
+      .map((member) => normalizeTeamMemberName(member.replace(/[.)]+$/g, '')))
       .filter(Boolean);
 
     return {
@@ -458,11 +344,11 @@ function parseTeamNameAndMembers(rawName) {
 
   const openParenIndex = fullName.indexOf('(');
   if (openParenIndex >= 0) {
-    const teamName = normalizeNameValue(fullName.slice(0, openParenIndex));
+    const teamName = normalizeTeamMemberName(fullName.slice(0, openParenIndex));
     const membersText = fullName.slice(openParenIndex + 1);
     const members = membersText
       .split(',')
-      .map((member) => normalizeNameValue(member.replace(/[.)]+$/g, '')))
+      .map((member) => normalizeTeamMemberName(member.replace(/[.)]+$/g, '')))
       .filter(Boolean);
 
     return {
@@ -471,8 +357,8 @@ function parseTeamNameAndMembers(rawName) {
     };
   }
 
-  const teamName = normalizeNameValue(fullName);
-  const members = [teamName].filter(Boolean);
+  const teamName = normalizeTeamMemberName(fullName);
+  const members = [normalizeTeamMemberName(fullName)].filter(Boolean);
 
   return {
     teamName,
@@ -670,10 +556,74 @@ async function saveSelectedEvent(overwrite = false) {
 
     const data = await response.json();
     saveEventSuccessMessage.value = data.message || 'Event saved successfully.';
+    savedEventId.value = Number(data?.event?.id) || null;
   } catch (error) {
     saveEventErrorMessage.value = error.message || 'Failed to save event details';
   } finally {
     saveEventLoading.value = false;
+  }
+}
+
+async function saveTransformedResults() {
+  saveTransformedErrorMessage.value = '';
+  saveTransformedSuccessMessage.value = '';
+
+  if (transformedRows.value.length === 0) {
+    saveTransformedErrorMessage.value = 'Run Transform before saving results.';
+    return;
+  }
+
+  if (!savedEventId.value) {
+    saveTransformedErrorMessage.value = 'Save Event first so transformed data can be linked.';
+    return;
+  }
+
+  const rowsPayload = transformedRows.value.map((row, index) => {
+    const scaledRow = scaledRows.value[index] || {};
+
+    const raw = {
+      final_score: row.final_score ?? null
+    };
+
+    const scaled = {
+      final_score: scaledRow.final_score ?? null
+    };
+
+    for (const category of fixedCategoryColumns) {
+      raw[category] = row[category] ?? null;
+      scaled[category] = scaledRow[category] ?? null;
+    }
+
+    return {
+      team_name: row.team_name,
+      team_member: row.team_member,
+      raw,
+      scaled
+    };
+  });
+
+  saveTransformedLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/events/${savedEventId.value}/transformed-results`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ rows: rowsPayload })
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to save transformed results');
+    }
+
+    const data = await response.json();
+    saveTransformedSuccessMessage.value = data.message || 'Transformed results saved successfully.';
+  } catch (error) {
+    saveTransformedErrorMessage.value = error.message || 'Failed to save transformed results';
+  } finally {
+    saveTransformedLoading.value = false;
   }
 }
 
@@ -702,6 +652,9 @@ async function loadSelectedEventJson() {
     transformedColumns.value = [];
     saveEventErrorMessage.value = '';
     saveEventSuccessMessage.value = '';
+    saveTransformedErrorMessage.value = '';
+    saveTransformedSuccessMessage.value = '';
+    savedEventId.value = null;
   } catch (error) {
     jsonLoadErrorMessage.value = error.message || 'Failed to load results';
     jsonLoadData.value = null;
@@ -710,462 +663,11 @@ async function loadSelectedEventJson() {
     transformedColumns.value = [];
     saveEventErrorMessage.value = '';
     saveEventSuccessMessage.value = '';
+    saveTransformedErrorMessage.value = '';
+    saveTransformedSuccessMessage.value = '';
+    savedEventId.value = null;
   } finally {
     jsonLoadLoading.value = false;
-  }
-}
-
-async function fetchEvents() {
-  loading.value = true;
-  errorMessage.value = '';
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events`);
-    if (!response.ok) {
-      throw new Error('Failed to load events');
-    }
-    events.value = await response.json();
-  } catch (error) {
-    errorMessage.value = error.message;
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function fetchUsers() {
-  usersLoading.value = true;
-  usersErrorMessage.value = '';
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/users`);
-    if (!response.ok) {
-      throw new Error('Failed to load users');
-    }
-    users.value = await response.json();
-  } catch (error) {
-    usersErrorMessage.value = error.message;
-  } finally {
-    usersLoading.value = false;
-  }
-}
-
-function resetNewUserForm() {
-  newUser.name = '';
-  newUser.email = '';
-}
-
-function cancelUserEdit() {
-  editingUserKey.value = null;
-  editUserForm.name = '';
-  editUserForm.email = '';
-}
-
-async function addUser() {
-  usersErrorMessage.value = '';
-
-  const payload = {
-    name: newUser.name.trim(),
-    email: newUser.email.trim()
-  };
-
-  if (!payload.name || !payload.email) {
-    usersErrorMessage.value = 'Name and Email are required.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/users`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to save user');
-    }
-
-    resetNewUserForm();
-    await fetchUsers();
-  } catch (error) {
-    usersErrorMessage.value = error.message;
-  }
-}
-
-function startUserEdit(user) {
-  editingUserKey.value = userKey(user);
-  editUserForm.name = user.name;
-  editUserForm.email = user.email;
-}
-
-async function saveUserEdit(originalUser) {
-  usersErrorMessage.value = '';
-
-  const payload = {
-    name: editUserForm.name.trim(),
-    email: editUserForm.email.trim()
-  };
-
-  if (!payload.name || !payload.email) {
-    usersErrorMessage.value = 'Name and Email are required.';
-    return;
-  }
-
-  try {
-    const query = new URLSearchParams({
-      name: originalUser.name,
-      email: originalUser.email
-    });
-
-    const response = await fetch(`${apiBaseUrl}/api/users?${query.toString()}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to update user');
-    }
-
-    cancelUserEdit();
-    await fetchUsers();
-  } catch (error) {
-    usersErrorMessage.value = error.message;
-  }
-}
-
-async function deleteUser(user) {
-  usersErrorMessage.value = '';
-
-  try {
-    const query = new URLSearchParams({
-      name: user.name,
-      email: user.email
-    });
-
-    const response = await fetch(`${apiBaseUrl}/api/users?${query.toString()}`, {
-      method: 'DELETE'
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to delete user');
-    }
-
-    if (editingUserKey.value === userKey(user)) {
-      cancelUserEdit();
-    }
-
-    await fetchUsers();
-  } catch (error) {
-    usersErrorMessage.value = error.message;
-  }
-}
-
-function resetNewTeamForm() {
-  newTeam.name = '';
-  newTeam.competitors = '';
-  newTeam.course = selectedEventCourses()[0] || '';
-  newTeam.category = selectedEventCategories()[0] || '';
-  newTeam.score = '';
-}
-
-function cancelTeamEdit() {
-  editingTeamId.value = null;
-  editTeamForm.name = '';
-  editTeamForm.competitors = '';
-  editTeamForm.course = '';
-  editTeamForm.category = '';
-  editTeamForm.score = '';
-}
-
-async function fetchTeams(eventId) {
-  teamsLoading.value = true;
-  teamsErrorMessage.value = '';
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/teams`);
-    if (!response.ok) {
-      throw new Error('Failed to load teams');
-    }
-    teams.value = await response.json();
-  } catch (error) {
-    teamsErrorMessage.value = error.message;
-  } finally {
-    teamsLoading.value = false;
-  }
-}
-
-async function openTeams(eventItem) {
-  selectedTeamsEvent.value = eventItem;
-  teams.value = [];
-  resetNewTeamForm();
-  cancelTeamEdit();
-  await fetchTeams(eventItem.id);
-}
-
-function closeTeamsView() {
-  selectedTeamsEvent.value = null;
-  teams.value = [];
-  teamsErrorMessage.value = '';
-  resetNewTeamForm();
-  cancelTeamEdit();
-}
-
-async function addTeam() {
-  const eventId = selectedTeamsEvent.value?.id;
-  if (!eventId) {
-    return;
-  }
-
-  teamsErrorMessage.value = '';
-
-  const payload = {
-    name: newTeam.name.trim(),
-    competitors: newTeam.competitors,
-    course: newTeam.course.trim(),
-    category: newTeam.category.trim(),
-    score: Number(newTeam.score)
-  };
-
-  if (!payload.name || !payload.competitors.trim() || !payload.course || !payload.category || Number.isNaN(payload.score)) {
-    teamsErrorMessage.value = 'Name, competitors, course, category, and score are required.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/teams`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to add team');
-    }
-
-    resetNewTeamForm();
-    await fetchTeams(eventId);
-  } catch (error) {
-    teamsErrorMessage.value = error.message;
-  }
-}
-
-function startTeamEdit(teamItem) {
-  editingTeamId.value = teamItem.id;
-  editTeamForm.name = teamItem.name;
-  editTeamForm.competitors = teamItem.competitors;
-  editTeamForm.course = teamItem.course;
-  editTeamForm.category = teamItem.category;
-  editTeamForm.score = String(teamItem.score);
-}
-
-async function saveTeamEdit(teamId) {
-  const eventId = selectedTeamsEvent.value?.id;
-  if (!eventId) {
-    return;
-  }
-
-  teamsErrorMessage.value = '';
-
-  const payload = {
-    name: editTeamForm.name.trim(),
-    competitors: editTeamForm.competitors,
-    course: editTeamForm.course.trim(),
-    category: editTeamForm.category.trim(),
-    score: Number(editTeamForm.score)
-  };
-
-  if (!payload.name || !payload.competitors.trim() || !payload.course || !payload.category || Number.isNaN(payload.score)) {
-    teamsErrorMessage.value = 'Name, competitors, course, category, and score are required.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/teams/${teamId}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to save team');
-    }
-
-    cancelTeamEdit();
-    await fetchTeams(eventId);
-  } catch (error) {
-    teamsErrorMessage.value = error.message;
-  }
-}
-
-async function deleteTeam(teamId) {
-  const eventId = selectedTeamsEvent.value?.id;
-  if (!eventId) {
-    return;
-  }
-
-  teamsErrorMessage.value = '';
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/teams/${teamId}`, {
-      method: 'DELETE'
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to delete team');
-    }
-
-    if (editingTeamId.value === teamId) {
-      cancelTeamEdit();
-    }
-
-    await fetchTeams(eventId);
-  } catch (error) {
-    teamsErrorMessage.value = error.message;
-  }
-}
-
-function resetNewEventForm() {
-  newEvent.name = '';
-  newEvent.date = '';
-  newEvent.location = '';
-  newEvent.courses = '';
-  newEvent.categories = '';
-}
-
-async function addEvent() {
-  errorMessage.value = '';
-
-  const payload = {
-    name: newEvent.name.trim(),
-    date: newEvent.date,
-    location: newEvent.location.trim(),
-    courses: parseCommaList(newEvent.courses),
-    categories: parseCommaList(newEvent.categories)
-  };
-
-  if (!payload.name || !payload.date || !payload.location) {
-    errorMessage.value = 'Name, Date, and Location are required.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to save event');
-    }
-
-    resetNewEventForm();
-    await fetchEvents();
-  } catch (error) {
-    errorMessage.value = error.message;
-  }
-}
-
-function startEdit(eventItem) {
-  editingEventId.value = eventItem.id;
-  editForm.name = eventItem.name;
-  editForm.date = eventItem.date;
-  editForm.location = eventItem.location;
-  editForm.courses = listToCommaText(eventItem.courses);
-  editForm.categories = listToCommaText(eventItem.categories);
-}
-
-function cancelEdit() {
-  editingEventId.value = null;
-  editForm.name = '';
-  editForm.date = '';
-  editForm.location = '';
-  editForm.courses = '';
-  editForm.categories = '';
-}
-
-async function saveEdit(id) {
-  errorMessage.value = '';
-
-  const payload = {
-    name: editForm.name.trim(),
-    date: editForm.date,
-    location: editForm.location.trim(),
-    courses: parseCommaList(editForm.courses),
-    categories: parseCommaList(editForm.categories)
-  };
-
-  if (!payload.name || !payload.date || !payload.location) {
-    errorMessage.value = 'Name, Date, and Location are required.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events/${id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to save event');
-    }
-
-    cancelEdit();
-    await fetchEvents();
-  } catch (error) {
-    errorMessage.value = error.message;
-  }
-}
-
-async function deleteEvent(id) {
-  errorMessage.value = '';
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/api/events/${id}`, {
-      method: 'DELETE'
-    });
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to delete event');
-    }
-
-    if (editingEventId.value === id) {
-      cancelEdit();
-    }
-
-    if (selectedTeamsEvent.value?.id === id) {
-      selectedTeamsEvent.value = null;
-      teams.value = [];
-      teamsErrorMessage.value = '';
-      resetNewTeamForm();
-      cancelTeamEdit();
-    }
-
-    await fetchEvents();
-  } catch (error) {
-    errorMessage.value = error.message;
   }
 }
 
@@ -1179,66 +681,10 @@ onMounted(() => {
     <h1>Rogainizer</h1>
 
     <div class="view-switcher">
-      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
+      <button type="button" class="active">Results Loader</button>
     </div>
 
-    <template v-if="currentView === 'users'">
-      <p v-if="usersErrorMessage" class="error">{{ usersErrorMessage }}</p>
-      <p v-if="usersLoading">Loading users...</p>
-
-      <table v-if="!usersLoading" class="events-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>
-              <input v-model="newUser.name" type="text" placeholder="User name" />
-            </td>
-            <td>
-              <input v-model="newUser.email" type="email" placeholder="name@example.com" />
-            </td>
-            <td class="actions-cell">
-              <button type="button" @click="addUser">Add</button>
-            </td>
-          </tr>
-
-          <tr v-for="user in users" :key="userKey(user)">
-            <td v-if="editingUserKey === userKey(user)">
-              <input v-model="editUserForm.name" type="text" />
-            </td>
-            <td v-else>{{ user.name }}</td>
-
-            <td v-if="editingUserKey === userKey(user)">
-              <input v-model="editUserForm.email" type="email" />
-            </td>
-            <td v-else>{{ user.email }}</td>
-
-            <td class="actions-cell">
-              <template v-if="editingUserKey === userKey(user)">
-                <button type="button" @click="saveUserEdit(user)">Save</button>
-                <button type="button" @click="cancelUserEdit">Cancel</button>
-              </template>
-              <template v-else>
-                <button type="button" @click="startUserEdit(user)">Edit</button>
-                <button type="button" @click="deleteUser(user)">Delete</button>
-              </template>
-            </td>
-          </tr>
-
-          <tr v-if="users.length === 0">
-            <td colspan="3" class="empty-state">No users yet.</td>
-          </tr>
-        </tbody>
-      </table>
-    </template>
-
-    <template v-else>
-      <section class="json-loader-section">
+    <section class="json-loader-section">
         <h2>Load Results</h2>
         <p class="json-loader-subtitle">Select year, event series, and event, then click Load to retrieve results.</p>
         <div class="json-loader-controls">
@@ -1299,7 +745,12 @@ onMounted(() => {
                 <input v-model="transformedDisplayMode" type="radio" value="scaled" />
                 Scaled
               </label>
+              <button type="button" @click="saveTransformedResults" :disabled="saveTransformedLoading || transformedRows.length === 0">
+                {{ saveTransformedLoading ? 'Saving...' : 'Save Results' }}
+              </button>
             </div>
+            <p v-if="saveTransformedErrorMessage" class="error">{{ saveTransformedErrorMessage }}</p>
+            <p v-if="saveTransformedSuccessMessage" class="success">{{ saveTransformedSuccessMessage }}</p>
             <table v-if="transformedRows.length > 0" class="events-table transformed-table">
               <thead>
                 <tr>
@@ -1323,43 +774,42 @@ onMounted(() => {
             <p v-else class="empty-state">Run Transform to view transformed rows.</p>
           </div>
         </div>
-      </section>
+    </section>
 
-      <div v-if="showCategoryMappingDialog" class="dialog-backdrop">
-        <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Category mapping">
-          <h3>Category Mapping</h3>
-          <p>Map raw categories to transformed categories before running transform.</p>
+    <div v-if="showCategoryMappingDialog" class="dialog-backdrop">
+      <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Category mapping">
+        <h3>Category Mapping</h3>
+        <p>Map raw categories to transformed categories before running transform.</p>
 
-          <table class="events-table mapping-table">
-            <thead>
-              <tr>
-                <th>Raw Category</th>
-                <th>Mapped Category</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, rowIndex) in categoryMappingRows" :key="`mapping-row-${rowIndex}`">
-                <td>{{ row.rawCategory }}</td>
-                <td>
-                  <select v-model="row.mappedCategory">
-                    <option value="">Unmapped</option>
-                    <option v-for="category in fixedCategoryColumns" :key="`map-option-${rowIndex}-${category}`" :value="category">
-                      {{ category }}
-                    </option>
-                  </select>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <table class="events-table mapping-table">
+          <thead>
+            <tr>
+              <th>Raw Category</th>
+              <th>Mapped Category</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, rowIndex) in categoryMappingRows" :key="`mapping-row-${rowIndex}`">
+              <td>{{ row.rawCategory }}</td>
+              <td>
+                <select v-model="row.mappedCategory">
+                  <option value="">Unmapped</option>
+                  <option v-for="category in fixedCategoryColumns" :key="`map-option-${rowIndex}-${category}`" :value="category">
+                    {{ category }}
+                  </option>
+                </select>
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
-          <div class="mapping-dialog-actions">
-            <p v-if="categoryMappingErrorMessage" class="error mapping-dialog-error">{{ categoryMappingErrorMessage }}</p>
-            <button type="button" @click="closeCategoryMappingDialog">Cancel</button>
-            <button type="button" @click="applyCategoryMappingAndTransform">Apply</button>
-          </div>
+        <div class="mapping-dialog-actions">
+          <p v-if="categoryMappingErrorMessage" class="error mapping-dialog-error">{{ categoryMappingErrorMessage }}</p>
+          <button type="button" @click="closeCategoryMappingDialog">Cancel</button>
+          <button type="button" @click="applyCategoryMappingAndTransform">Apply</button>
         </div>
       </div>
-    </template>
+    </div>
   </main>
 </template>
 
@@ -1383,12 +833,6 @@ select {
   padding: 0.5rem;
 }
 
-.actions-cell {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
 button {
   padding: 0.5rem 0.8rem;
   cursor: pointer;
@@ -1410,41 +854,8 @@ button {
   margin: 1rem 0;
 }
 
-.teams-section {
-  margin-top: 2rem;
-}
-
-.back-button {
-  margin-bottom: 0.75rem;
-}
-
-.teams-subtitle {
-  margin-top: 0;
-}
-
-.teams-sort-controls {
-  display: flex;
-  gap: 1rem;
-  margin: 0.5rem 0 1rem;
-  flex-wrap: wrap;
-}
-
-.teams-sort-controls label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.teams-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 1rem 0;
-}
-
 .events-table th,
-.events-table td,
-.teams-table th,
-.teams-table td {
+.events-table td {
   border: 1px solid #ddd;
   padding: 0.6rem;
   text-align: left;
