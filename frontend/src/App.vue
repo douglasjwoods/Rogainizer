@@ -485,7 +485,7 @@ function transformLoadedJson() {
   transformedDisplayMode.value = 'raw';
 
   if (!jsonLoadData.value || typeof jsonLoadData.value !== 'object') {
-    transformErrorMessage.value = 'Load JSON data first.';
+    transformErrorMessage.value = 'Load results data first.';
     return;
   }
 
@@ -494,7 +494,7 @@ function transformLoadedJson() {
   const teamsData = Array.isArray(jsonLoadData.value.teams) ? jsonLoadData.value.teams : [];
 
   if (teamsData.length === 0) {
-    transformErrorMessage.value = 'No teams found in loaded JSON.';
+    transformErrorMessage.value = 'No teams found in loaded results.';
     return;
   }
 
@@ -543,7 +543,7 @@ async function loadSelectedEventJson() {
     const response = await fetch(`${apiBaseUrl}/api/json-loader?${query.toString()}`);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new Error(data.message || 'Failed to load JSON from URL');
+      throw new Error(data.message || 'Failed to load results from URL');
     }
 
     const data = await response.json();
@@ -552,7 +552,7 @@ async function loadSelectedEventJson() {
     transformedRows.value = [];
     transformedColumns.value = [];
   } catch (error) {
-    jsonLoadErrorMessage.value = error.message || 'Failed to load JSON';
+    jsonLoadErrorMessage.value = error.message || 'Failed to load results';
     jsonLoadData.value = null;
     transformErrorMessage.value = '';
     transformedRows.value = [];
@@ -1028,7 +1028,7 @@ onMounted(() => {
     <div class="view-switcher">
       <button type="button" :class="{ active: currentView === 'events' }" @click="switchView('events')">Events</button>
       <button type="button" :class="{ active: currentView === 'users' }" @click="switchView('users')">Users</button>
-      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">JSON Loader</button>
+      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
     </div>
 
     <template v-if="currentView === 'events'">
@@ -1293,8 +1293,8 @@ onMounted(() => {
 
     <template v-else>
       <section class="json-loader-section">
-        <h2>Load JSON</h2>
-        <p class="json-loader-subtitle">Select year, event series, and event, then click Load.</p>
+        <h2>Load Results</h2>
+        <p class="json-loader-subtitle">Select year, event series, and event, then click Load to retrieve results.</p>
         <div class="json-loader-controls">
           <label>
             Year
@@ -1333,7 +1333,7 @@ onMounted(() => {
 
         <div v-if="jsonLoadData !== null" class="json-panels">
           <div class="json-output-panel">
-            <h3>Raw JSON</h3>
+            <h3>Raw Results</h3>
             <JsonTreeNode :value="jsonLoadData" label="root" />
           </div>
 
