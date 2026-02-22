@@ -1,0 +1,5 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Nightly DB backup at 02:30 server time
+30 2 * * * cd /opt/rogainizer && /opt/rogainizer/deploy/backup-db.sh >> /opt/rogainizer/deploy/backup.log 2>&1

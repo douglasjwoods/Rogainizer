@@ -1,0 +1,95 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - git
+  - ufw
+
+write_files:
+  - path: /usr/local/bin/rogainizer-autodeploy.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      REPO_URL="https://github.com/your-org/your-repo.git"
+      REPO_REF="main"
+      APP_DIR="/opt/rogainizer"
+
+      DOMAIN="example.com"
+      MYSQL_ROOT_PASSWORD="replace-with-strong-root-password"
+      DB_USER="root"
+      DB_PASSWORD="replace-with-strong-db-password"
+      DB_NAME="rogainizer"
+
+      if [[ "$REPO_URL" == "https://github.com/your-org/your-repo.git" ]]; then
+        echo "REPO_URL is still placeholder. Edit deploy/digitalocean-cloud-init-autodeploy.yaml before use."
+        exit 1
+      fi
+
+      if ! command -v docker >/dev/null 2>&1; then
+        curl -fsSL https://get.docker.com | sh
+      fi
+
+      systemctl enable docker
+      systemctl start docker
+
+      if id -nG ubuntu | grep -qw docker; then
+        :
+      else
+        usermod -aG docker ubuntu
+      fi
+
+      ufw allow OpenSSH
+      ufw allow 80
+      ufw allow 443
+      ufw --force enable
+
+      timedatectl set-timezone Pacific/Auckland || true
+
+      mkdir -p /opt
+
+      if [[ ! -d "$APP_DIR/.git" ]]; then
+        git clone "$REPO_URL" "$APP_DIR"
+      fi
+
+      cd "$APP_DIR"
+      git fetch --all --prune
+      git checkout "$REPO_REF"
+      git pull --ff-only origin "$REPO_REF"
+
+      cat > .env.production <<EOF
+      DOMAIN=${DOMAIN}
+      MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      DB_USER=${DB_USER}
+      DB_PASSWORD=${DB_PASSWORD}
+      DB_NAME=${DB_NAME}
+      EOF
+
+      docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+
+      for attempt in 1 2 3 4 5; do
+        if docker compose --env-file .env.production -f docker-compose.prod.yml exec -T api npm run db:init; then
+          break
+        fi
+
+        if [[ "$attempt" == "5" ]]; then
+          echo "db:init failed after retries"
+          exit 1
+        fi
+
+        sleep 8
+      done
+
+      chmod +x ./deploy/postdeploy-check.sh || true
+      ./deploy/postdeploy-check.sh .env.production || true
+      chmod +x ./deploy/first-boot-report.sh || true
+      ./deploy/first-boot-report.sh .env.production /var/log/rogainizer-report.txt || true
+
+runcmd:
+  - [ bash, -lc, '/usr/local/bin/rogainizer-autodeploy.sh > /var/log/rogainizer-autodeploy.log 2>&1' ]
+
+final_message: "Rogainizer autodeploy cloud-init complete. Check /var/log/rogainizer-autodeploy.log"

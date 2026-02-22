@@ -1,0 +1,40 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - ufw
+
+write_files:
+  - path: /usr/local/bin/rogainizer-bootstrap.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      if ! command -v docker >/dev/null 2>&1; then
+        curl -fsSL https://get.docker.com | sh
+      fi
+
+      systemctl enable docker
+      systemctl start docker
+
+      if id -nG ubuntu | grep -qw docker; then
+        :
+      else
+        usermod -aG docker ubuntu
+      fi
+
+      ufw allow OpenSSH
+      ufw allow 80
+      ufw allow 443
+      ufw --force enable
+
+      timedatectl set-timezone Pacific/Auckland || true
+
+runcmd:
+  - [ bash, -lc, '/usr/local/bin/rogainizer-bootstrap.sh > /var/log/rogainizer-bootstrap.log 2>&1' ]
+
+final_message: "Rogainizer cloud-init complete. Reconnect SSH, then deploy the app from /opt/rogainizer instructions."
