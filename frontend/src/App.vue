@@ -77,7 +77,8 @@ const activeLeaderBoard = ref(null);
 const leaderBoardScoresRows = ref([]);
 const leaderBoardScoresLoading = ref(false);
 const leaderBoardScoresErrorMessage = ref('');
-const leaderBoardScoresDisplayMode = ref('scaled');
+const leaderBoardScoresShowRaw = ref(false);
+const leaderBoardScoresShowRank = ref(false);
 const leaderBoardScoreSortColumn = ref('final_score');
 const leaderBoardScoreSortDirection = ref('desc');
 const showLeaderBoardMemberDialog = ref(false);
@@ -260,7 +261,7 @@ const eventResultsColumns = computed(() => ['team_name', 'team_member', 'final_s
 
 const displayedLeaderBoardScoreRows = computed(() =>
   leaderBoardScoresRows.value.map((row) => {
-    const modeValues = row[leaderBoardScoresDisplayMode.value] || {};
+    const modeValues = row[leaderBoardScoresShowRaw.value ? 'raw' : 'scaled'] || {};
     return {
       team_name: row.team_name,
       team_member: row.team_member,
@@ -268,6 +269,42 @@ const displayedLeaderBoardScoreRows = computed(() =>
     };
   })
 );
+
+const leaderBoardScoreRanks = computed(() => {
+  const rankByColumn = {};
+  const rows = displayedLeaderBoardScoreRows.value;
+
+  for (const column of leaderBoardScoreColumns.value) {
+    if (!isLeaderBoardScoreColumn(column) || column === 'event_count') {
+      continue;
+    }
+
+    const values = rows
+      .map((row) => ({
+        member: String(row.team_member || ''),
+        value: Number(row[column] ?? 0)
+      }))
+      .filter((item) => Number.isFinite(item.value) && item.value > 0)
+      .sort((left, right) => right.value - left.value);
+
+    const columnRanks = {};
+    let previousValue = null;
+    let previousRank = 0;
+
+    values.forEach((item, index) => {
+      const currentRank = previousValue === item.value ? previousRank : index + 1;
+      if (!(item.member in columnRanks)) {
+        columnRanks[item.member] = currentRank;
+      }
+      previousValue = item.value;
+      previousRank = currentRank;
+    });
+
+    rankByColumn[column] = columnRanks;
+  }
+
+  return rankByColumn;
+});
 
 const sortedLeaderBoardScoreRows = computed(() => {
   const items = [...displayedLeaderBoardScoreRows.value];
@@ -422,6 +459,12 @@ function formatLeaderBoardScoreCell(row, column) {
     if (!Number.isFinite(numericValue) || numericValue === 0) {
       return ' ';
     }
+
+    if (leaderBoardScoresShowRank.value) {
+      const member = String(row.team_member || '');
+      const rank = Number(leaderBoardScoreRanks.value?.[column]?.[member] ?? 0);
+      return Number.isFinite(rank) && rank > 0 ? rank : ' ';
+    }
   }
 
   return row[column];
@@ -435,7 +478,7 @@ function closeLeaderBoardMemberDialog() {
 }
 
 function eventRowCategoriesText(eventRow) {
-  const mode = leaderBoardScoresDisplayMode.value;
+  const mode = leaderBoardScoresShowRaw.value ? 'raw' : 'scaled';
   const modeSuffix = mode === 'scaled' ? 'Scaled' : 'Raw';
 
   return fixedCategoryColumns
@@ -452,7 +495,7 @@ function eventRowCategoriesText(eventRow) {
 }
 
 function eventRowScoreValue(eventRow) {
-  const fieldName = leaderBoardScoresDisplayMode.value === 'scaled' ? 'finalScoreScaled' : 'finalScoreRaw';
+  const fieldName = leaderBoardScoresShowRaw.value ? 'finalScoreRaw' : 'finalScoreScaled';
   const numericValue = Number(eventRow?.[fieldName] ?? 0);
 
   if (!Number.isFinite(numericValue) || numericValue === 0) {
@@ -776,7 +819,8 @@ async function createLeaderBoardScoreView(leaderBoard) {
   };
   leaderBoardScoresRows.value = [];
   leaderBoardScoresErrorMessage.value = '';
-  leaderBoardScoresDisplayMode.value = 'scaled';
+  leaderBoardScoresShowRaw.value = false;
+  leaderBoardScoresShowRank.value = false;
   leaderBoardScoreSortColumn.value = 'final_score';
   leaderBoardScoreSortDirection.value = 'desc';
   leaderBoardScoresLoading.value = true;
@@ -1790,12 +1834,12 @@ onMounted(() => {
 
           <div v-if="!leaderBoardScoresLoading && leaderBoardScoresRows.length > 0" class="transformed-mode-switch">
             <label>
-              <input v-model="leaderBoardScoresDisplayMode" type="radio" value="scaled" />
-              Scaled
+              <input v-model="leaderBoardScoresShowRaw" type="checkbox" />
+              Raw
             </label>
             <label>
-              <input v-model="leaderBoardScoresDisplayMode" type="radio" value="raw" />
-              Raw
+              <input v-model="leaderBoardScoresShowRank" type="checkbox" />
+              Rank
             </label>
           </div>
 
@@ -1818,7 +1862,7 @@ onMounted(() => {
                   v-for="column in leaderBoardScoreColumns"
                   :key="`leader-board-score-cell-${rowIndex}-${column}`"
                   :class="{
-                    'scaled-score-cell': leaderBoardScoresDisplayMode === 'scaled' && column !== 'team_name' && column !== 'team_member',
+                    'scaled-score-cell': !leaderBoardScoresShowRaw && column !== 'team_name' && column !== 'team_member',
                     'member-cell': column === 'team_member'
                   }"
                   @click="column === 'team_member' ? openLeaderBoardMemberDialog(row) : null"
