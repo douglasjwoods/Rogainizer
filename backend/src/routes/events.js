@@ -39,6 +39,153 @@ router.get('/', async (_req, res) => {
   }
 });
 
+router.get('/:eventId/results', async (req, res) => {
+  const eventId = Number(req.params.eventId);
+
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return res.status(400).json({ message: 'eventId must be a positive integer' });
+  }
+
+  try {
+    const [eventRows] = await pool.query(
+      `SELECT
+         id,
+         year,
+         series,
+         name,
+         DATE_FORMAT(date, '%Y-%m-%d') AS date
+       FROM events
+       WHERE id = ?
+       LIMIT 1`,
+      [eventId]
+    );
+
+    const event = eventRows[0];
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found.' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT
+         id,
+         team_name,
+         team_member,
+         final_score_raw,
+         final_score_scaled,
+         mj_raw, mj_scaled,
+         wj_raw, wj_scaled,
+         xj_raw, xj_scaled,
+         mo_raw, mo_scaled,
+         wo_raw, wo_scaled,
+         xo_raw, xo_scaled,
+         mv_raw, mv_scaled,
+         wv_raw, wv_scaled,
+         xv_raw, xv_scaled,
+         msv_raw, msv_scaled,
+         wsv_raw, wsv_scaled,
+         xsv_raw, xsv_scaled,
+         muv_raw, muv_scaled,
+         wuv_raw, wuv_scaled,
+         xuv_raw, xuv_scaled
+       FROM results
+       WHERE event_id = ?
+       ORDER BY team_name ASC, team_member ASC`,
+      [eventId]
+    );
+
+    return res.json({ event, rows });
+  } catch (error) {
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        message: 'Required tables do not exist. Run backend/sql/init.sql first.'
+      });
+    }
+
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.put('/:eventId/results/:resultId', async (req, res) => {
+  const eventId = Number(req.params.eventId);
+  const resultId = Number(req.params.resultId);
+  const teamName = String(req.body?.team_name || '').trim();
+  const teamMember = String(req.body?.team_member || '').trim();
+
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return res.status(400).json({ message: 'eventId must be a positive integer' });
+  }
+
+  if (!Number.isInteger(resultId) || resultId <= 0) {
+    return res.status(400).json({ message: 'resultId must be a positive integer' });
+  }
+
+  if (!teamMember) {
+    return res.status(400).json({ message: 'team_member is required' });
+  }
+
+  try {
+    const [result] = await pool.query(
+      `UPDATE results
+       SET
+         team_name = ?,
+         team_member = ?
+       WHERE id = ?
+         AND event_id = ?`,
+      [teamName, teamMember, resultId, eventId]
+    );
+
+    if (!result?.affectedRows) {
+      return res.status(404).json({ message: 'Result row not found for this event.' });
+    }
+
+    return res.json({ message: 'Result row updated successfully.' });
+  } catch (error) {
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        message: 'Required tables do not exist. Run backend/sql/init.sql first.'
+      });
+    }
+
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/:eventId/results/:resultId', async (req, res) => {
+  const eventId = Number(req.params.eventId);
+  const resultId = Number(req.params.resultId);
+
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return res.status(400).json({ message: 'eventId must be a positive integer' });
+  }
+
+  if (!Number.isInteger(resultId) || resultId <= 0) {
+    return res.status(400).json({ message: 'resultId must be a positive integer' });
+  }
+
+  try {
+    const [result] = await pool.query(
+      `DELETE FROM results
+       WHERE id = ?
+         AND event_id = ?`,
+      [resultId, eventId]
+    );
+
+    if (!result?.affectedRows) {
+      return res.status(404).json({ message: 'Result row not found for this event.' });
+    }
+
+    return res.json({ message: 'Result row deleted successfully.' });
+  } catch (error) {
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        message: 'Required tables do not exist. Run backend/sql/init.sql first.'
+      });
+    }
+
+    return res.status(500).json({ message: error.message });
+  }
+});
+
 router.post('/save-result', async (req, res) => {
   const {
     year,

@@ -95,6 +95,21 @@ const leaderBoardYearResults = ref([]);
 const leaderBoardYearResultsLoading = ref(false);
 const leaderBoardYearResultsErrorMessage = ref('');
 const selectedLeaderBoardResultIds = ref([]);
+const resultsEvents = ref([]);
+const resultsEventsLoading = ref(false);
+const resultsEventsErrorMessage = ref('');
+const selectedResultsEventId = ref('');
+const selectedResultsEvent = ref(null);
+const eventResultsRows = ref([]);
+const eventResultsLoading = ref(false);
+const eventResultsErrorMessage = ref('');
+const eventResultsDisplayMode = ref('scaled');
+const showEditResultDialog = ref(false);
+const editResultId = ref(null);
+const editResultTeamName = ref('');
+const editResultTeamMember = ref('');
+const editResultLoading = ref(false);
+const editResultErrorMessage = ref('');
 const showEditLeaderBoardDialog = ref(false);
 const editLeaderBoardId = ref(null);
 const editLeaderBoardLoading = ref(false);
@@ -240,6 +255,7 @@ const displayedTransformedRows = computed(() =>
 );
 
 const leaderBoardScoreColumns = computed(() => ['team_member', 'final_score', ...fixedCategoryColumns]);
+const eventResultsColumns = computed(() => ['team_name', 'team_member', 'final_score', ...fixedCategoryColumns]);
 
 const displayedLeaderBoardScoreRows = computed(() =>
   leaderBoardScoresRows.value.map((row) => {
@@ -271,6 +287,17 @@ const sortedLeaderBoardScoreRows = computed(() => {
 
   return items;
 });
+
+const displayedEventResultsRows = computed(() =>
+  eventResultsRows.value.map((row) => {
+    const modeValues = row[eventResultsDisplayMode.value] || {};
+    return {
+      team_name: row.team_name,
+      team_member: row.team_member,
+      ...modeValues
+    };
+  })
+);
 
 const selectedEventDuration = computed(() => {
   const duration = Number(jsonLoadData.value?.event_duration);
@@ -455,7 +482,247 @@ function switchView(view) {
   if (view === 'leader-boards') {
     fetchLeaderBoards();
   }
+
+  if (view === 'results') {
+    fetchResultsEvents();
+  }
 }
+
+function formatResultCell(row, column) {
+  if (column === 'team_name' || column === 'team_member') {
+    return row[column] || ' ';
+  }
+
+  const numericValue = Number(row[column] ?? 0);
+  if (!Number.isFinite(numericValue) || numericValue === 0) {
+    return ' ';
+  }
+
+  return numericValue;
+}
+
+function shouldHighlightMemberName(memberName) {
+  const words = String(memberName || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return false;
+  }
+
+  if (words.length === 1 || words.length > 2) {
+    return true;
+  }
+
+  const startsWithCapital = (value) => /^[A-Z]/.test(String(value || '').trim());
+  const firstName = words[0];
+  const lastName = words[words.length - 1];
+
+  return !startsWithCapital(firstName) || !startsWithCapital(lastName);
+}
+
+async function fetchResultsEvents() {
+  if (resultsEventsLoading.value) {
+    return;
+  }
+
+  resultsEventsLoading.value = true;
+  resultsEventsErrorMessage.value = '';
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/events`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load events');
+    }
+
+    const data = await response.json();
+    resultsEvents.value = Array.isArray(data) ? data : [];
+  } catch (error) {
+    resultsEventsErrorMessage.value = error.message || 'Failed to load events';
+  } finally {
+    resultsEventsLoading.value = false;
+  }
+}
+
+async function loadSelectedEventResults() {
+  const eventId = Number(selectedResultsEventId.value);
+  eventResultsErrorMessage.value = '';
+  eventResultsRows.value = [];
+  selectedResultsEvent.value = null;
+
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return;
+  }
+
+  eventResultsLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/results`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load event results');
+    }
+
+    const data = await response.json();
+    selectedResultsEvent.value = data?.event || null;
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+
+    eventResultsRows.value = rows.map((item) => ({
+      id: Number(item?.id ?? 0),
+      team_name: String(item?.team_name || ''),
+      team_member: String(item?.team_member || ''),
+      raw: {
+        final_score: Number(item?.final_score_raw ?? 0),
+        MJ: Number(item?.mj_raw ?? 0),
+        WJ: Number(item?.wj_raw ?? 0),
+        XJ: Number(item?.xj_raw ?? 0),
+        MO: Number(item?.mo_raw ?? 0),
+        WO: Number(item?.wo_raw ?? 0),
+        XO: Number(item?.xo_raw ?? 0),
+        MV: Number(item?.mv_raw ?? 0),
+        WV: Number(item?.wv_raw ?? 0),
+        XV: Number(item?.xv_raw ?? 0),
+        MSV: Number(item?.msv_raw ?? 0),
+        WSV: Number(item?.wsv_raw ?? 0),
+        XSV: Number(item?.xsv_raw ?? 0),
+        MUV: Number(item?.muv_raw ?? 0),
+        WUV: Number(item?.wuv_raw ?? 0),
+        XUV: Number(item?.xuv_raw ?? 0)
+      },
+      scaled: {
+        final_score: Number(item?.final_score_scaled ?? 0),
+        MJ: Number(item?.mj_scaled ?? 0),
+        WJ: Number(item?.wj_scaled ?? 0),
+        XJ: Number(item?.xj_scaled ?? 0),
+        MO: Number(item?.mo_scaled ?? 0),
+        WO: Number(item?.wo_scaled ?? 0),
+        XO: Number(item?.xo_scaled ?? 0),
+        MV: Number(item?.mv_scaled ?? 0),
+        WV: Number(item?.wv_scaled ?? 0),
+        XV: Number(item?.xv_scaled ?? 0),
+        MSV: Number(item?.msv_scaled ?? 0),
+        WSV: Number(item?.wsv_scaled ?? 0),
+        XSV: Number(item?.xsv_scaled ?? 0),
+        MUV: Number(item?.muv_scaled ?? 0),
+        WUV: Number(item?.wuv_scaled ?? 0),
+        XUV: Number(item?.xuv_scaled ?? 0)
+      }
+    }));
+  } catch (error) {
+    eventResultsErrorMessage.value = error.message || 'Failed to load event results';
+  } finally {
+    eventResultsLoading.value = false;
+  }
+}
+
+function openEditResultDialog(row) {
+  const resultId = Number(row?.id);
+  if (!Number.isInteger(resultId) || resultId <= 0) {
+    return;
+  }
+
+  editResultId.value = resultId;
+  editResultTeamName.value = String(row?.team_name || '');
+  editResultTeamMember.value = String(row?.team_member || '');
+  editResultErrorMessage.value = '';
+  showEditResultDialog.value = true;
+}
+
+function closeEditResultDialog() {
+  showEditResultDialog.value = false;
+  editResultId.value = null;
+  editResultErrorMessage.value = '';
+}
+
+async function saveEditedResultRow() {
+  editResultErrorMessage.value = '';
+
+  const eventId = Number(selectedResultsEventId.value);
+  const resultId = Number(editResultId.value);
+
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    editResultErrorMessage.value = 'Select an event first.';
+    return;
+  }
+
+  if (!Number.isInteger(resultId) || resultId <= 0) {
+    editResultErrorMessage.value = 'Invalid result row selected.';
+    return;
+  }
+
+  const payload = {
+    team_name: String(editResultTeamName.value || '').trim(),
+    team_member: String(editResultTeamMember.value || '').trim()
+  };
+
+  if (!payload.team_member) {
+    editResultErrorMessage.value = 'Member is required.';
+    return;
+  }
+
+  editResultLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/results/${resultId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to update result row');
+    }
+
+    await loadSelectedEventResults();
+    closeEditResultDialog();
+  } catch (error) {
+    editResultErrorMessage.value = error.message || 'Failed to update result row';
+  } finally {
+    editResultLoading.value = false;
+  }
+}
+
+async function deleteResultRow(row) {
+  const eventId = Number(selectedResultsEventId.value);
+  const resultId = Number(row?.id);
+
+  if (!Number.isInteger(eventId) || eventId <= 0 || !Number.isInteger(resultId) || resultId <= 0) {
+    return;
+  }
+
+  const confirmed = window.confirm('Delete this result row?');
+  if (!confirmed) {
+    return;
+  }
+
+  eventResultsErrorMessage.value = '';
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/events/${eventId}/results/${resultId}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to delete result row');
+    }
+
+    await loadSelectedEventResults();
+  } catch (error) {
+    eventResultsErrorMessage.value = error.message || 'Failed to delete result row';
+  }
+}
+
+watch(selectedResultsEventId, () => {
+  if (currentView.value === 'results') {
+    loadSelectedEventResults();
+  }
+});
 
 async function fetchLeaderBoards() {
   leaderBoardsLoading.value = true;
@@ -1273,6 +1540,7 @@ onMounted(() => {
 
     <div class="view-switcher">
       <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
+      <button type="button" :class="{ active: currentView === 'results' }" @click="switchView('results')">Results</button>
       <button type="button" :class="{ active: currentView === 'leader-boards' }" @click="switchView('leader-boards')">Leader Boards</button>
     </div>
 
@@ -1368,7 +1636,90 @@ onMounted(() => {
         </div>
     </section>
 
-    <section v-else class="json-loader-section">
+    <section v-else-if="currentView === 'results'" class="json-loader-section">
+      <h2>Results</h2>
+      <div class="json-loader-controls">
+        <label>
+          Event
+          <select v-model="selectedResultsEventId" :disabled="resultsEventsLoading || resultsEvents.length === 0">
+            <option value="" disabled>Select event</option>
+            <option v-for="eventItem in resultsEvents" :key="`saved-event-${eventItem.id}`" :value="String(eventItem.id)">
+              {{ eventItem.year }} - {{ eventItem.series }} - {{ eventItem.name }}
+            </option>
+          </select>
+        </label>
+      </div>
+      <p v-if="resultsEventsLoading">Loading events...</p>
+      <p v-if="resultsEventsErrorMessage" class="error">{{ resultsEventsErrorMessage }}</p>
+      <p v-if="selectedResultsEvent">{{ selectedResultsEvent.name }} ({{ selectedResultsEvent.date }})</p>
+
+      <div v-if="eventResultsRows.length > 0" class="transformed-mode-switch">
+        <label>
+          <input v-model="eventResultsDisplayMode" type="radio" value="raw" />
+          Raw
+        </label>
+        <label>
+          <input v-model="eventResultsDisplayMode" type="radio" value="scaled" />
+          Scaled
+        </label>
+      </div>
+
+      <p v-if="eventResultsLoading">Loading results...</p>
+      <p v-if="eventResultsErrorMessage" class="error">{{ eventResultsErrorMessage }}</p>
+
+      <table v-if="!eventResultsLoading && eventResultsRows.length > 0" class="events-table transformed-table">
+        <thead>
+          <tr>
+            <th v-for="column in eventResultsColumns" :key="`event-results-header-${column}`">{{ transformedColumnLabel(column) }}</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(row, rowIndex) in displayedEventResultsRows" :key="`event-results-row-${rowIndex}`">
+            <td
+              v-for="column in eventResultsColumns"
+              :key="`event-results-cell-${rowIndex}-${column}`"
+              :class="{
+                'scaled-score-cell': eventResultsDisplayMode === 'scaled' && column !== 'team_name' && column !== 'team_member',
+                'result-member-warning': column === 'team_member' && shouldHighlightMemberName(row.team_member)
+              }"
+            >
+              {{ formatResultCell(row, column) }}
+            </td>
+            <td>
+              <button type="button" @click="openEditResultDialog(eventResultsRows[rowIndex])">Edit</button>
+              <button type="button" @click="deleteResultRow(eventResultsRows[rowIndex])">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="!eventResultsLoading" class="empty-state">No saved results for this event.</p>
+    </section>
+
+    <div v-if="showEditResultDialog" class="dialog-backdrop">
+      <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Edit result row">
+        <h3>Edit Result Row</h3>
+        <div class="json-loader-controls">
+          <label>
+            Team
+            <input v-model="editResultTeamName" type="text" placeholder="Team name" />
+          </label>
+          <label>
+            Member
+            <input v-model="editResultTeamMember" type="text" placeholder="Member name" />
+          </label>
+        </div>
+        <p v-if="editResultErrorMessage" class="error">{{ editResultErrorMessage }}</p>
+        <div class="mapping-dialog-actions">
+          <button type="button" @click="closeEditResultDialog">Cancel</button>
+          <button type="button" @click="saveEditedResultRow" :disabled="editResultLoading">
+            {{ editResultLoading ? 'Saving...' : 'Save Changes' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <section v-else-if="currentView === 'leader-boards'" class="json-loader-section">
       <h2>Leader Boards</h2>
       <button type="button" @click="openCreateLeaderBoardDialog">Create Leader Board</button>
       <p v-if="createLeaderBoardSuccessMessage" class="success">{{ createLeaderBoardSuccessMessage }}</p>
@@ -1740,6 +2091,11 @@ button {
 .events-table td.member-cell {
   cursor: pointer;
   text-decoration: underline;
+}
+
+.events-table td.result-member-warning {
+  color: #b00020;
+  font-weight: 600;
 }
 
 .dialog-backdrop {
