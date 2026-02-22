@@ -95,6 +95,17 @@ const leaderBoardYearResults = ref([]);
 const leaderBoardYearResultsLoading = ref(false);
 const leaderBoardYearResultsErrorMessage = ref('');
 const selectedLeaderBoardResultIds = ref([]);
+const showEditLeaderBoardDialog = ref(false);
+const editLeaderBoardId = ref(null);
+const editLeaderBoardLoading = ref(false);
+const editLeaderBoardLoadingDetails = ref(false);
+const editLeaderBoardErrorMessage = ref('');
+const editLeaderBoardName = ref('');
+const editLeaderBoardYear = ref('');
+const editLeaderBoardYearResults = ref([]);
+const editLeaderBoardYearResultsLoading = ref(false);
+const editLeaderBoardYearResultsErrorMessage = ref('');
+const selectedEditLeaderBoardResultIds = ref([]);
 
 const filteredEventSeries = computed(() => {
   const targetYear = String(selectedEventYear.value || '').trim();
@@ -296,6 +307,12 @@ watch(filteredEvents, (options) => {
 watch(newLeaderBoardYear, () => {
   if (showCreateLeaderBoardDialog.value) {
     fetchLeaderBoardYearResults();
+  }
+});
+
+watch(editLeaderBoardYear, () => {
+  if (showEditLeaderBoardDialog.value && !editLeaderBoardLoadingDetails.value) {
+    fetchEditLeaderBoardYearResults();
   }
 });
 
@@ -556,6 +573,167 @@ function closeCreateLeaderBoardDialog() {
   showCreateLeaderBoardDialog.value = false;
   createLeaderBoardErrorMessage.value = '';
   leaderBoardYearResultsErrorMessage.value = '';
+}
+
+async function openEditLeaderBoardDialog(leaderBoard) {
+  const leaderBoardId = Number(leaderBoard?.id);
+  if (!Number.isInteger(leaderBoardId) || leaderBoardId <= 0) {
+    return;
+  }
+
+  createLeaderBoardSuccessMessage.value = '';
+  editLeaderBoardErrorMessage.value = '';
+  editLeaderBoardYearResultsErrorMessage.value = '';
+  editLeaderBoardId.value = leaderBoardId;
+  editLeaderBoardName.value = String(leaderBoard?.name || '').trim();
+  editLeaderBoardYear.value = String(leaderBoard?.year || '').trim();
+  editLeaderBoardYearResults.value = [];
+  selectedEditLeaderBoardResultIds.value = [];
+  showEditLeaderBoardDialog.value = true;
+  editLeaderBoardLoadingDetails.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards/details/${leaderBoardId}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load leader board details');
+    }
+
+    const data = await response.json();
+    const loadedLeaderBoard = data?.leaderBoard || {};
+    editLeaderBoardName.value = String(loadedLeaderBoard?.name || '').trim();
+    editLeaderBoardYear.value = String(loadedLeaderBoard?.year || '').trim();
+
+    selectedEditLeaderBoardResultIds.value = Array.isArray(data?.eventIds)
+      ? [...new Set(data.eventIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))]
+      : [];
+
+    await fetchEditLeaderBoardYearResults(true);
+  } catch (error) {
+    editLeaderBoardErrorMessage.value = error.message || 'Failed to load leader board details';
+  } finally {
+    editLeaderBoardLoadingDetails.value = false;
+  }
+}
+
+function closeEditLeaderBoardDialog() {
+  showEditLeaderBoardDialog.value = false;
+  editLeaderBoardId.value = null;
+  editLeaderBoardErrorMessage.value = '';
+  editLeaderBoardYearResultsErrorMessage.value = '';
+}
+
+async function fetchEditLeaderBoardYearResults(preserveSelection = false) {
+  const year = Number(editLeaderBoardYear.value);
+  editLeaderBoardYearResultsErrorMessage.value = '';
+  editLeaderBoardYearResults.value = [];
+
+  if (!preserveSelection) {
+    selectedEditLeaderBoardResultIds.value = [];
+  }
+
+  if (!Number.isInteger(year) || year <= 0) {
+    return;
+  }
+
+  editLeaderBoardYearResultsLoading.value = true;
+
+  try {
+    const query = new URLSearchParams({ year: String(year) });
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards/year-results?${query.toString()}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load results for selected year');
+    }
+
+    const data = await response.json();
+    editLeaderBoardYearResults.value = Array.isArray(data) ? data : [];
+
+    const validIds = new Set(editLeaderBoardYearResults.value.map((result) => Number(result.id)).filter((value) => Number.isInteger(value) && value > 0));
+    selectedEditLeaderBoardResultIds.value = selectedEditLeaderBoardResultIds.value.filter((id) => validIds.has(id));
+  } catch (error) {
+    editLeaderBoardYearResultsErrorMessage.value = error.message || 'Failed to load results for selected year';
+  } finally {
+    editLeaderBoardYearResultsLoading.value = false;
+  }
+}
+
+function toggleEditLeaderBoardResultSelection(eventId) {
+  const numericId = Number(eventId);
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    return;
+  }
+
+  if (selectedEditLeaderBoardResultIds.value.includes(numericId)) {
+    selectedEditLeaderBoardResultIds.value = selectedEditLeaderBoardResultIds.value.filter((id) => id !== numericId);
+    return;
+  }
+
+  selectedEditLeaderBoardResultIds.value = [...selectedEditLeaderBoardResultIds.value, numericId];
+}
+
+async function updateLeaderBoard() {
+  editLeaderBoardErrorMessage.value = '';
+  createLeaderBoardSuccessMessage.value = '';
+
+  const leaderBoardId = Number(editLeaderBoardId.value);
+  const payload = {
+    name: String(editLeaderBoardName.value || '').trim(),
+    year: Number(editLeaderBoardYear.value),
+    eventIds: selectedEditLeaderBoardResultIds.value
+  };
+
+  if (!Number.isInteger(leaderBoardId) || leaderBoardId <= 0) {
+    editLeaderBoardErrorMessage.value = 'Invalid leader board selected.';
+    return;
+  }
+
+  if (!payload.name || !Number.isInteger(payload.year) || payload.year <= 0) {
+    editLeaderBoardErrorMessage.value = 'Name and Year (positive integer) are required.';
+    return;
+  }
+
+  if (!Array.isArray(payload.eventIds) || payload.eventIds.length === 0) {
+    editLeaderBoardErrorMessage.value = 'Select at least one result to include in the leader board.';
+    return;
+  }
+
+  editLeaderBoardLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards/${leaderBoardId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to update leader board');
+    }
+
+    const data = await response.json();
+    createLeaderBoardSuccessMessage.value = data.message || 'Leader board updated successfully.';
+    await fetchLeaderBoards();
+
+    if (activeLeaderBoard.value?.id === leaderBoardId) {
+      activeLeaderBoard.value = {
+        ...activeLeaderBoard.value,
+        name: payload.name,
+        year: payload.year,
+        eventCount: payload.eventIds.length
+      };
+      await createLeaderBoardScoreView(activeLeaderBoard.value);
+    }
+
+    closeEditLeaderBoardDialog();
+  } catch (error) {
+    editLeaderBoardErrorMessage.value = error.message || 'Failed to update leader board';
+  } finally {
+    editLeaderBoardLoading.value = false;
+  }
 }
 
 async function fetchLeaderBoardYearResults() {
@@ -1214,6 +1392,7 @@ onMounted(() => {
                 <td>{{ leaderBoard.year }}</td>
                 <td>{{ leaderBoard.eventCount }}</td>
                 <td>
+                  <button type="button" @click="openEditLeaderBoardDialog(leaderBoard)">Edit</button>
                   <button type="button" @click="createLeaderBoardScoreView(leaderBoard)">Create</button>
                 </td>
               </tr>
@@ -1354,6 +1533,59 @@ onMounted(() => {
           <button type="button" @click="closeCreateLeaderBoardDialog">Cancel</button>
           <button type="button" @click="createLeaderBoard" :disabled="createLeaderBoardLoading">
             {{ createLeaderBoardLoading ? 'Saving...' : 'Save Leader Board' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showEditLeaderBoardDialog" class="dialog-backdrop">
+      <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Edit leader board">
+        <h3>Edit Leader Board</h3>
+        <div class="json-loader-controls">
+          <label>
+            Name
+            <input v-model="editLeaderBoardName" type="text" placeholder="Leader board name" />
+          </label>
+          <label>
+            Year
+            <input v-model="editLeaderBoardYear" type="text" inputmode="numeric" placeholder="2026" />
+          </label>
+        </div>
+        <p v-if="editLeaderBoardLoadingDetails">Loading leader board details...</p>
+        <p v-if="editLeaderBoardYearResultsLoading">Loading results for selected year...</p>
+        <p v-if="editLeaderBoardYearResultsErrorMessage" class="error">{{ editLeaderBoardYearResultsErrorMessage }}</p>
+        <p v-if="editLeaderBoardErrorMessage" class="error">{{ editLeaderBoardErrorMessage }}</p>
+
+        <table v-if="editLeaderBoardYearResults.length > 0" class="events-table mapping-table">
+          <thead>
+            <tr>
+              <th>Select</th>
+              <th>Name</th>
+              <th>Series</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="result in editLeaderBoardYearResults" :key="`edit-leader-board-result-${result.id}`">
+              <td>
+                <input
+                  type="checkbox"
+                  :checked="selectedEditLeaderBoardResultIds.includes(result.id)"
+                  @change="toggleEditLeaderBoardResultSelection(result.id)"
+                />
+              </td>
+              <td>{{ result.name }}</td>
+              <td>{{ result.series }}</td>
+              <td>{{ result.date }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else-if="!editLeaderBoardYearResultsLoading" class="empty-state">Load year results to select entries.</p>
+
+        <div class="mapping-dialog-actions">
+          <button type="button" @click="closeEditLeaderBoardDialog">Cancel</button>
+          <button type="button" @click="updateLeaderBoard" :disabled="editLeaderBoardLoading || editLeaderBoardLoadingDetails">
+            {{ editLeaderBoardLoading ? 'Saving...' : 'Save Changes' }}
           </button>
         </div>
       </div>

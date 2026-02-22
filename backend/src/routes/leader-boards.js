@@ -3,6 +3,170 @@ import pool from '../config/db.js';
 
 const router = Router();
 
+router.get('/details/:leaderBoardId', async (req, res) => {
+  const leaderBoardId = Number(req.params.leaderBoardId);
+
+  if (!Number.isInteger(leaderBoardId) || leaderBoardId <= 0) {
+    return res.status(400).json({ message: 'leaderBoardId must be a positive integer' });
+  }
+
+  try {
+    const [leaderBoardRows] = await pool.query(
+      `SELECT
+         id,
+         name,
+         year,
+         event_count AS eventCount
+       FROM leader_boards
+       WHERE id = ?
+       LIMIT 1`,
+      [leaderBoardId]
+    );
+
+    const leaderBoard = leaderBoardRows[0];
+    if (!leaderBoard) {
+      return res.status(404).json({ message: 'Leader board not found.' });
+    }
+
+    const [eventRows] = await pool.query(
+      `SELECT
+         event_id AS eventId
+       FROM leader_board_results
+       WHERE leader_board_id = ?
+       ORDER BY event_id ASC`,
+      [leaderBoardId]
+    );
+
+    return res.json({
+      leaderBoard,
+      eventIds: eventRows.map((row) => Number(row.eventId)).filter((value) => Number.isInteger(value) && value > 0)
+    });
+  } catch (error) {
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        message: 'Required tables do not exist. Run backend/sql/init.sql first.'
+      });
+    }
+
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.put('/:leaderBoardId', async (req, res) => {
+  const leaderBoardId = Number(req.params.leaderBoardId);
+  const name = String(req.body?.name || '').trim();
+  const year = Number(req.body?.year);
+  const eventIds = Array.isArray(req.body?.eventIds)
+    ? [...new Set(req.body.eventIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))]
+    : [];
+
+  if (!Number.isInteger(leaderBoardId) || leaderBoardId <= 0) {
+    return res.status(400).json({ message: 'leaderBoardId must be a positive integer' });
+  }
+
+  if (!name) {
+    return res.status(400).json({ message: 'name is required' });
+  }
+
+  if (!Number.isInteger(year) || year <= 0) {
+    return res.status(400).json({ message: 'year must be a positive integer' });
+  }
+
+  if (eventIds.length === 0) {
+    return res.status(400).json({ message: 'At least one selected result is required' });
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [existingRows] = await connection.query(
+      `SELECT id
+       FROM leader_boards
+       WHERE id = ?
+       LIMIT 1`,
+      [leaderBoardId]
+    );
+
+    if (existingRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Leader board not found.' });
+    }
+
+    const placeholders = eventIds.map(() => '?').join(', ');
+    const [matchingEvents] = await connection.query(
+      `SELECT id
+       FROM events
+       WHERE year = ?
+         AND id IN (${placeholders})`,
+      [year, ...eventIds]
+    );
+
+    if (matchingEvents.length !== eventIds.length) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Selected results must belong to the chosen year.' });
+    }
+
+    await connection.query(
+      `UPDATE leader_boards
+       SET
+         name = ?,
+         year = ?,
+         event_count = ?
+       WHERE id = ?`,
+      [name, year, eventIds.length, leaderBoardId]
+    );
+
+    await connection.query(
+      `DELETE FROM leader_board_results
+       WHERE leader_board_id = ?`,
+      [leaderBoardId]
+    );
+
+    const valuesPlaceholders = eventIds.map(() => '(?, ?)').join(', ');
+    const values = eventIds.flatMap((eventId) => [leaderBoardId, eventId]);
+
+    await connection.query(
+      `INSERT INTO leader_board_results (
+         leader_board_id,
+         event_id
+       ) VALUES ${valuesPlaceholders}`,
+      values
+    );
+
+    const [rows] = await connection.query(
+      `SELECT
+         id,
+         name,
+         year,
+         event_count AS eventCount
+       FROM leader_boards
+       WHERE id = ?
+       LIMIT 1`,
+      [leaderBoardId]
+    );
+
+    await connection.commit();
+
+    return res.json({
+      message: 'Leader board updated successfully.',
+      leaderBoard: rows[0]
+    });
+  } catch (error) {
+    await connection.rollback();
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      return res.status(500).json({
+        message: 'Required tables do not exist. Run backend/sql/init.sql first.'
+      });
+    }
+
+    return res.status(500).json({ message: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
 router.get('/:leaderBoardId/scoreboard', async (req, res) => {
   const leaderBoardId = Number(req.params.leaderBoardId);
 
