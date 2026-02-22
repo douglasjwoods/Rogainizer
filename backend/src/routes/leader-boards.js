@@ -196,6 +196,7 @@ router.get('/:leaderBoardId/scoreboard', async (req, res) => {
       `SELECT
          MIN(r.team_name) AS team_name,
          r.team_member,
+         COUNT(DISTINCT lbr.event_id) AS event_count,
          SUM(COALESCE(r.final_score_raw, 0)) AS final_score_raw,
          SUM(COALESCE(r.final_score_scaled, 0)) AS final_score_scaled,
          SUM(COALESCE(r.mj_raw, 0)) AS mj_raw,

@@ -45,7 +45,7 @@ function parseWeightingTable(rawTable) {
 }
 
 const weightingTable = parseWeightingTable(weightingTableConfig);
-const currentView = ref('json-loader');
+const currentView = ref('leader-boards');
 const jsonLoadErrorMessage = ref('');
 const jsonLoadData = ref(null);
 const jsonLoadLoading = ref(false);
@@ -104,6 +104,7 @@ const eventResultsRows = ref([]);
 const eventResultsLoading = ref(false);
 const eventResultsErrorMessage = ref('');
 const eventResultsDisplayMode = ref('scaled');
+const showOnlyFlaggedResultMembers = ref(false);
 const showEditResultDialog = ref(false);
 const editResultId = ref(null);
 const editResultTeamName = ref('');
@@ -254,7 +255,7 @@ const displayedTransformedRows = computed(() =>
   transformedDisplayMode.value === 'scaled' ? scaledRows.value : transformedRows.value
 );
 
-const leaderBoardScoreColumns = computed(() => ['team_member', 'final_score', ...fixedCategoryColumns]);
+const leaderBoardScoreColumns = computed(() => ['team_member', 'event_count', 'final_score', ...fixedCategoryColumns]);
 const eventResultsColumns = computed(() => ['team_name', 'team_member', 'final_score', ...fixedCategoryColumns]);
 
 const displayedLeaderBoardScoreRows = computed(() =>
@@ -292,12 +293,21 @@ const displayedEventResultsRows = computed(() =>
   eventResultsRows.value.map((row) => {
     const modeValues = row[eventResultsDisplayMode.value] || {};
     return {
+      id: row.id,
       team_name: row.team_name,
       team_member: row.team_member,
       ...modeValues
     };
   })
 );
+
+const filteredEventResultsRows = computed(() => {
+  if (!showOnlyFlaggedResultMembers.value) {
+    return displayedEventResultsRows.value;
+  }
+
+  return displayedEventResultsRows.value.filter((row) => shouldHighlightMemberName(row.team_member));
+});
 
 const selectedEventDuration = computed(() => {
   const duration = Number(jsonLoadData.value?.event_duration);
@@ -356,6 +366,10 @@ function transformedColumnLabel(column) {
     return 'Score';
   }
 
+  if (column === 'event_count') {
+    return 'Events';
+  }
+
   return column;
 }
 
@@ -396,6 +410,11 @@ function leaderBoardColumnLabel(column) {
 function formatLeaderBoardScoreCell(row, column) {
   if (column === 'team_member') {
     return row[column];
+  }
+
+  if (column === 'event_count') {
+    const numericValue = Number(row[column] ?? 0);
+    return Number.isFinite(numericValue) ? numericValue : 0;
   }
 
   if (isLeaderBoardScoreColumn(column)) {
@@ -774,6 +793,7 @@ async function createLeaderBoardScoreView(leaderBoard) {
 
     leaderBoardScoresRows.value = rows.map((item) => {
       const rawValues = {
+        event_count: Number(item?.event_count ?? 0),
         final_score: Number(item?.final_score_raw ?? 0),
         MJ: Number(item?.mj_raw ?? 0),
         WJ: Number(item?.wj_raw ?? 0),
@@ -793,6 +813,7 @@ async function createLeaderBoardScoreView(leaderBoard) {
       };
 
       const scaledValues = {
+        event_count: Number(item?.event_count ?? 0),
         final_score: Number(item?.final_score_scaled ?? 0),
         MJ: Number(item?.mj_scaled ?? 0),
         WJ: Number(item?.wj_scaled ?? 0),
@@ -1275,6 +1296,10 @@ function transformLoadedJson() {
   }
 
   const rows = [];
+  const hasAnyNzTaggedMember = teamsData.some((team) => {
+    const { members } = parseTeamNameAndMembers(team?.name);
+    return members.some((member) => hasNzCountryCode(member));
+  });
 
   const categoryMapping = new Map(
     fixedCategoryColumns.map((category) => [normalizeRawTeamCategory(category), category])
@@ -1291,7 +1316,9 @@ function transformLoadedJson() {
 
   for (const team of teamsData) {
     const { teamName, members } = parseTeamNameAndMembers(team?.name);
-    const filteredMembers = members.filter((member) => hasNzCountryCode(member));
+    const filteredMembers = hasAnyNzTaggedMember
+      ? members.filter((member) => hasNzCountryCode(member))
+      : members;
     if (filteredMembers.length === 0) {
       continue;
     }
@@ -1539,9 +1566,9 @@ onMounted(() => {
     <h1>Rogainizer</h1>
 
     <div class="view-switcher">
-      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
-      <button type="button" :class="{ active: currentView === 'results' }" @click="switchView('results')">Results</button>
       <button type="button" :class="{ active: currentView === 'leader-boards' }" @click="switchView('leader-boards')">Leader Boards</button>
+      <button type="button" :class="{ active: currentView === 'results' }" @click="switchView('results')">Results</button>
+      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
     </div>
 
     <section v-if="currentView === 'json-loader'" class="json-loader-section">
@@ -1662,12 +1689,16 @@ onMounted(() => {
           <input v-model="eventResultsDisplayMode" type="radio" value="scaled" />
           Scaled
         </label>
+        <label>
+          <input v-model="showOnlyFlaggedResultMembers" type="checkbox" />
+          Flagged only
+        </label>
       </div>
 
       <p v-if="eventResultsLoading">Loading results...</p>
       <p v-if="eventResultsErrorMessage" class="error">{{ eventResultsErrorMessage }}</p>
 
-      <table v-if="!eventResultsLoading && eventResultsRows.length > 0" class="events-table transformed-table">
+      <table v-if="!eventResultsLoading && filteredEventResultsRows.length > 0" class="events-table transformed-table">
         <thead>
           <tr>
             <th v-for="column in eventResultsColumns" :key="`event-results-header-${column}`">{{ transformedColumnLabel(column) }}</th>
@@ -1675,7 +1706,7 @@ onMounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(row, rowIndex) in displayedEventResultsRows" :key="`event-results-row-${rowIndex}`">
+          <tr v-for="(row, rowIndex) in filteredEventResultsRows" :key="`event-results-row-${row.id || rowIndex}`">
             <td
               v-for="column in eventResultsColumns"
               :key="`event-results-cell-${rowIndex}-${column}`"
@@ -1687,8 +1718,8 @@ onMounted(() => {
               {{ formatResultCell(row, column) }}
             </td>
             <td>
-              <button type="button" @click="openEditResultDialog(eventResultsRows[rowIndex])">Edit</button>
-              <button type="button" @click="deleteResultRow(eventResultsRows[rowIndex])">Delete</button>
+              <button type="button" @click="openEditResultDialog(row)">Edit</button>
+              <button type="button" @click="deleteResultRow(row)">Delete</button>
             </td>
           </tr>
         </tbody>
@@ -1720,8 +1751,6 @@ onMounted(() => {
     </div>
 
     <section v-else-if="currentView === 'leader-boards'" class="json-loader-section">
-      <h2>Leader Boards</h2>
-      <button type="button" @click="openCreateLeaderBoardDialog">Create Leader Board</button>
       <p v-if="createLeaderBoardSuccessMessage" class="success">{{ createLeaderBoardSuccessMessage }}</p>
       <p v-if="leaderBoardsErrorMessage" class="error">{{ leaderBoardsErrorMessage }}</p>
       <p v-if="leaderBoardsLoading">Loading leader boards...</p>
@@ -1733,7 +1762,7 @@ onMounted(() => {
               <tr>
                 <th>Name</th>
                 <th>Year</th>
-                <th>Event Count</th>
+                <th>Events</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -1744,7 +1773,7 @@ onMounted(() => {
                 <td>{{ leaderBoard.eventCount }}</td>
                 <td>
                   <button type="button" @click="openEditLeaderBoardDialog(leaderBoard)">Edit</button>
-                  <button type="button" @click="createLeaderBoardScoreView(leaderBoard)">Create</button>
+                  <button type="button" @click="createLeaderBoardScoreView(leaderBoard)">View</button>
                 </td>
               </tr>
               <tr v-if="leaderBoards.length === 0">
@@ -1761,12 +1790,12 @@ onMounted(() => {
 
           <div v-if="!leaderBoardScoresLoading && leaderBoardScoresRows.length > 0" class="transformed-mode-switch">
             <label>
-              <input v-model="leaderBoardScoresDisplayMode" type="radio" value="raw" />
-              Raw
-            </label>
-            <label>
               <input v-model="leaderBoardScoresDisplayMode" type="radio" value="scaled" />
               Scaled
+            </label>
+            <label>
+              <input v-model="leaderBoardScoresDisplayMode" type="radio" value="raw" />
+              Raw
             </label>
           </div>
 
