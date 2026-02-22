@@ -45,6 +45,7 @@ function parseWeightingTable(rawTable) {
 }
 
 const weightingTable = parseWeightingTable(weightingTableConfig);
+const currentView = ref('json-loader');
 const jsonLoadErrorMessage = ref('');
 const jsonLoadData = ref(null);
 const jsonLoadLoading = ref(false);
@@ -69,6 +70,31 @@ const showCategoryMappingDialog = ref(false);
 const categoryMappingRows = ref([]);
 const categoryMappingErrorMessage = ref('');
 const fixedCategoryColumns = ['MJ', 'WJ', 'XJ', 'MO', 'WO', 'XO', 'MV', 'WV', 'XV', 'MSV', 'WSV', 'XSV', 'MUV', 'WUV', 'XUV'];
+const leaderBoards = ref([]);
+const leaderBoardsLoading = ref(false);
+const leaderBoardsErrorMessage = ref('');
+const activeLeaderBoard = ref(null);
+const leaderBoardScoresRows = ref([]);
+const leaderBoardScoresLoading = ref(false);
+const leaderBoardScoresErrorMessage = ref('');
+const leaderBoardScoresDisplayMode = ref('scaled');
+const leaderBoardScoreSortColumn = ref('final_score');
+const leaderBoardScoreSortDirection = ref('desc');
+const showLeaderBoardMemberDialog = ref(false);
+const selectedLeaderBoardMember = ref('');
+const leaderBoardMemberEventRows = ref([]);
+const leaderBoardMemberEventsLoading = ref(false);
+const leaderBoardMemberEventsErrorMessage = ref('');
+const showCreateLeaderBoardDialog = ref(false);
+const createLeaderBoardLoading = ref(false);
+const createLeaderBoardErrorMessage = ref('');
+const createLeaderBoardSuccessMessage = ref('');
+const newLeaderBoardName = ref('');
+const newLeaderBoardYear = ref('');
+const leaderBoardYearResults = ref([]);
+const leaderBoardYearResultsLoading = ref(false);
+const leaderBoardYearResultsErrorMessage = ref('');
+const selectedLeaderBoardResultIds = ref([]);
 
 const filteredEventSeries = computed(() => {
   const targetYear = String(selectedEventYear.value || '').trim();
@@ -202,6 +228,39 @@ const displayedTransformedRows = computed(() =>
   transformedDisplayMode.value === 'scaled' ? scaledRows.value : transformedRows.value
 );
 
+const leaderBoardScoreColumns = computed(() => ['team_member', 'final_score', ...fixedCategoryColumns]);
+
+const displayedLeaderBoardScoreRows = computed(() =>
+  leaderBoardScoresRows.value.map((row) => {
+    const modeValues = row[leaderBoardScoresDisplayMode.value] || {};
+    return {
+      team_name: row.team_name,
+      team_member: row.team_member,
+      ...modeValues
+    };
+  })
+);
+
+const sortedLeaderBoardScoreRows = computed(() => {
+  const items = [...displayedLeaderBoardScoreRows.value];
+  const sortColumn = leaderBoardScoreSortColumn.value;
+  const direction = leaderBoardScoreSortDirection.value === 'asc' ? 1 : -1;
+
+  items.sort((left, right) => {
+    if (sortColumn === 'team_name' || sortColumn === 'team_member') {
+      const leftValue = String(left[sortColumn] || '').toLowerCase();
+      const rightValue = String(right[sortColumn] || '').toLowerCase();
+      return leftValue.localeCompare(rightValue) * direction;
+    }
+
+    const leftValue = Number(left[sortColumn] ?? 0);
+    const rightValue = Number(right[sortColumn] ?? 0);
+    return (leftValue - rightValue) * direction;
+  });
+
+  return items;
+});
+
 const selectedEventDuration = computed(() => {
   const duration = Number(jsonLoadData.value?.event_duration);
   return Number.isFinite(duration) ? duration : null;
@@ -234,6 +293,12 @@ watch(filteredEvents, (options) => {
   }
 });
 
+watch(newLeaderBoardYear, () => {
+  if (showCreateLeaderBoardDialog.value) {
+    fetchLeaderBoardYearResults();
+  }
+});
+
 function transformedColumnLabel(column) {
   if (column === 'team_name') {
     return 'Team';
@@ -248,6 +313,339 @@ function transformedColumnLabel(column) {
   }
 
   return column;
+}
+
+function isLeaderBoardScoreColumn(column) {
+  return column !== 'team_name' && column !== 'team_member';
+}
+
+function sortLeaderBoardScoresBy(column) {
+  if (!isLeaderBoardScoreColumn(column)) {
+    return;
+  }
+
+  if (leaderBoardScoreSortColumn.value === column) {
+    leaderBoardScoreSortDirection.value = leaderBoardScoreSortDirection.value === 'asc' ? 'desc' : 'asc';
+    return;
+  }
+
+  leaderBoardScoreSortColumn.value = column;
+  leaderBoardScoreSortDirection.value = 'desc';
+}
+
+function leaderBoardSortIndicator(column) {
+  if (leaderBoardScoreSortColumn.value !== column) {
+    return '';
+  }
+
+  return leaderBoardScoreSortDirection.value === 'asc' ? ' ▲' : ' ▼';
+}
+
+function leaderBoardColumnLabel(column) {
+  if (column === 'team_member') {
+    return ' ';
+  }
+
+  return transformedColumnLabel(column);
+}
+
+function formatLeaderBoardScoreCell(row, column) {
+  if (column === 'team_member') {
+    return row[column];
+  }
+
+  if (isLeaderBoardScoreColumn(column)) {
+    const numericValue = Number(row[column]);
+    if (!Number.isFinite(numericValue) || numericValue === 0) {
+      return ' ';
+    }
+  }
+
+  return row[column];
+}
+
+function closeLeaderBoardMemberDialog() {
+  showLeaderBoardMemberDialog.value = false;
+  selectedLeaderBoardMember.value = '';
+  leaderBoardMemberEventRows.value = [];
+  leaderBoardMemberEventsErrorMessage.value = '';
+}
+
+function eventRowCategoriesText(eventRow) {
+  const mode = leaderBoardScoresDisplayMode.value;
+  const modeSuffix = mode === 'scaled' ? 'Scaled' : 'Raw';
+
+  return fixedCategoryColumns
+    .map((category) => {
+      const fieldName = `${category.toLowerCase()}${modeSuffix}`;
+      const numericValue = Number(eventRow?.[fieldName] ?? 0);
+      if (!Number.isFinite(numericValue) || numericValue === 0) {
+        return '';
+      }
+      return `${category}: ${numericValue}`;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+function eventRowScoreValue(eventRow) {
+  const fieldName = leaderBoardScoresDisplayMode.value === 'scaled' ? 'finalScoreScaled' : 'finalScoreRaw';
+  const numericValue = Number(eventRow?.[fieldName] ?? 0);
+
+  if (!Number.isFinite(numericValue) || numericValue === 0) {
+    return ' ';
+  }
+
+  return numericValue;
+}
+
+async function openLeaderBoardMemberDialog(row) {
+  if (!activeLeaderBoard.value?.id) {
+    return;
+  }
+
+  const memberName = String(row?.team_member || '').trim();
+  if (!memberName) {
+    return;
+  }
+
+  selectedLeaderBoardMember.value = memberName;
+  leaderBoardMemberEventRows.value = [];
+  leaderBoardMemberEventsErrorMessage.value = '';
+  leaderBoardMemberEventsLoading.value = true;
+  showLeaderBoardMemberDialog.value = true;
+
+  try {
+    const query = new URLSearchParams({ member: memberName });
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards/${activeLeaderBoard.value.id}/member-events?${query.toString()}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load member event scores');
+    }
+
+    const data = await response.json();
+    leaderBoardMemberEventRows.value = Array.isArray(data) ? data : [];
+  } catch (error) {
+    leaderBoardMemberEventsErrorMessage.value = error.message || 'Failed to load member event scores';
+  } finally {
+    leaderBoardMemberEventsLoading.value = false;
+  }
+}
+
+function switchView(view) {
+  currentView.value = view;
+
+  if (view === 'leader-boards') {
+    fetchLeaderBoards();
+  }
+}
+
+async function fetchLeaderBoards() {
+  leaderBoardsLoading.value = true;
+  leaderBoardsErrorMessage.value = '';
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load leader boards');
+    }
+
+    const data = await response.json();
+    leaderBoards.value = Array.isArray(data) ? data : [];
+  } catch (error) {
+    leaderBoardsErrorMessage.value = error.message || 'Failed to load leader boards';
+  } finally {
+    leaderBoardsLoading.value = false;
+  }
+}
+
+async function createLeaderBoardScoreView(leaderBoard) {
+  if (!leaderBoard?.id) {
+    return;
+  }
+
+  activeLeaderBoard.value = {
+    id: leaderBoard.id,
+    name: leaderBoard.name,
+    year: leaderBoard.year,
+    eventCount: leaderBoard.eventCount
+  };
+  leaderBoardScoresRows.value = [];
+  leaderBoardScoresErrorMessage.value = '';
+  leaderBoardScoresDisplayMode.value = 'scaled';
+  leaderBoardScoreSortColumn.value = 'final_score';
+  leaderBoardScoreSortDirection.value = 'desc';
+  leaderBoardScoresLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards/${leaderBoard.id}/scoreboard`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to create leader board scores');
+    }
+
+    const data = await response.json();
+    const rows = Array.isArray(data?.rows) ? data.rows : [];
+
+    leaderBoardScoresRows.value = rows.map((item) => {
+      const rawValues = {
+        final_score: Number(item?.final_score_raw ?? 0),
+        MJ: Number(item?.mj_raw ?? 0),
+        WJ: Number(item?.wj_raw ?? 0),
+        XJ: Number(item?.xj_raw ?? 0),
+        MO: Number(item?.mo_raw ?? 0),
+        WO: Number(item?.wo_raw ?? 0),
+        XO: Number(item?.xo_raw ?? 0),
+        MV: Number(item?.mv_raw ?? 0),
+        WV: Number(item?.wv_raw ?? 0),
+        XV: Number(item?.xv_raw ?? 0),
+        MSV: Number(item?.msv_raw ?? 0),
+        WSV: Number(item?.wsv_raw ?? 0),
+        XSV: Number(item?.xsv_raw ?? 0),
+        MUV: Number(item?.muv_raw ?? 0),
+        WUV: Number(item?.wuv_raw ?? 0),
+        XUV: Number(item?.xuv_raw ?? 0)
+      };
+
+      const scaledValues = {
+        final_score: Number(item?.final_score_scaled ?? 0),
+        MJ: Number(item?.mj_scaled ?? 0),
+        WJ: Number(item?.wj_scaled ?? 0),
+        XJ: Number(item?.xj_scaled ?? 0),
+        MO: Number(item?.mo_scaled ?? 0),
+        WO: Number(item?.wo_scaled ?? 0),
+        XO: Number(item?.xo_scaled ?? 0),
+        MV: Number(item?.mv_scaled ?? 0),
+        WV: Number(item?.wv_scaled ?? 0),
+        XV: Number(item?.xv_scaled ?? 0),
+        MSV: Number(item?.msv_scaled ?? 0),
+        WSV: Number(item?.wsv_scaled ?? 0),
+        XSV: Number(item?.xsv_scaled ?? 0),
+        MUV: Number(item?.muv_scaled ?? 0),
+        WUV: Number(item?.wuv_scaled ?? 0),
+        XUV: Number(item?.xuv_scaled ?? 0)
+      };
+
+      return {
+        team_name: String(item?.team_name || ''),
+        team_member: String(item?.team_member || ''),
+        raw: rawValues,
+        scaled: scaledValues
+      };
+    });
+  } catch (error) {
+    leaderBoardScoresErrorMessage.value = error.message || 'Failed to create leader board scores';
+  } finally {
+    leaderBoardScoresLoading.value = false;
+  }
+}
+
+function openCreateLeaderBoardDialog() {
+  createLeaderBoardErrorMessage.value = '';
+  createLeaderBoardSuccessMessage.value = '';
+  newLeaderBoardName.value = '';
+  newLeaderBoardYear.value = '';
+  leaderBoardYearResults.value = [];
+  leaderBoardYearResultsErrorMessage.value = '';
+  selectedLeaderBoardResultIds.value = [];
+  showCreateLeaderBoardDialog.value = true;
+}
+
+function closeCreateLeaderBoardDialog() {
+  showCreateLeaderBoardDialog.value = false;
+  createLeaderBoardErrorMessage.value = '';
+  leaderBoardYearResultsErrorMessage.value = '';
+}
+
+async function fetchLeaderBoardYearResults() {
+  const year = Number(newLeaderBoardYear.value);
+  leaderBoardYearResultsErrorMessage.value = '';
+  leaderBoardYearResults.value = [];
+  selectedLeaderBoardResultIds.value = [];
+
+  if (!Number.isInteger(year) || year <= 0) {
+    return;
+  }
+
+  leaderBoardYearResultsLoading.value = true;
+
+  try {
+    const query = new URLSearchParams({ year: String(year) });
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards/year-results?${query.toString()}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to load results for selected year');
+    }
+
+    const data = await response.json();
+    leaderBoardYearResults.value = Array.isArray(data) ? data : [];
+  } catch (error) {
+    leaderBoardYearResultsErrorMessage.value = error.message || 'Failed to load results for selected year';
+  } finally {
+    leaderBoardYearResultsLoading.value = false;
+  }
+}
+
+function toggleLeaderBoardResultSelection(eventId) {
+  const numericId = Number(eventId);
+  if (!Number.isInteger(numericId) || numericId <= 0) {
+    return;
+  }
+
+  if (selectedLeaderBoardResultIds.value.includes(numericId)) {
+    selectedLeaderBoardResultIds.value = selectedLeaderBoardResultIds.value.filter((id) => id !== numericId);
+    return;
+  }
+
+  selectedLeaderBoardResultIds.value = [...selectedLeaderBoardResultIds.value, numericId];
+}
+
+async function createLeaderBoard() {
+  createLeaderBoardErrorMessage.value = '';
+  createLeaderBoardSuccessMessage.value = '';
+
+  const payload = {
+    name: String(newLeaderBoardName.value || '').trim(),
+    year: Number(newLeaderBoardYear.value),
+    eventIds: selectedLeaderBoardResultIds.value
+  };
+
+  if (!payload.name || !Number.isInteger(payload.year) || payload.year <= 0) {
+    createLeaderBoardErrorMessage.value = 'Name and Year (positive integer) are required.';
+    return;
+  }
+
+  if (!Array.isArray(payload.eventIds) || payload.eventIds.length === 0) {
+    createLeaderBoardErrorMessage.value = 'Select at least one result to include in the leader board.';
+    return;
+  }
+
+  createLeaderBoardLoading.value = true;
+
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/leader-boards`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || 'Failed to create leader board');
+    }
+
+    const data = await response.json();
+    createLeaderBoardSuccessMessage.value = data.message || 'Leader board created successfully.';
+    await fetchLeaderBoards();
+    closeCreateLeaderBoardDialog();
+  } catch (error) {
+    createLeaderBoardErrorMessage.value = error.message || 'Failed to create leader board';
+  } finally {
+    createLeaderBoardLoading.value = false;
+  }
 }
 
 async function fetchEventsIndex() {
@@ -673,6 +1071,7 @@ async function loadSelectedEventJson() {
 
 onMounted(() => {
   fetchEventsIndex();
+  fetchLeaderBoards();
 });
 </script>
 
@@ -681,10 +1080,11 @@ onMounted(() => {
     <h1>Rogainizer</h1>
 
     <div class="view-switcher">
-      <button type="button" class="active">Results Loader</button>
+      <button type="button" :class="{ active: currentView === 'json-loader' }" @click="switchView('json-loader')">Results Loader</button>
+      <button type="button" :class="{ active: currentView === 'leader-boards' }" @click="switchView('leader-boards')">Leader Boards</button>
     </div>
 
-    <section class="json-loader-section">
+    <section v-if="currentView === 'json-loader'" class="json-loader-section">
         <h2>Load Results</h2>
         <p class="json-loader-subtitle">Select year, event series, and event, then click Load to retrieve results.</p>
         <div class="json-loader-controls">
@@ -776,6 +1176,175 @@ onMounted(() => {
         </div>
     </section>
 
+    <section v-else class="json-loader-section">
+      <h2>Leader Boards</h2>
+      <button type="button" @click="openCreateLeaderBoardDialog">Create Leader Board</button>
+      <p v-if="createLeaderBoardSuccessMessage" class="success">{{ createLeaderBoardSuccessMessage }}</p>
+      <p v-if="leaderBoardsErrorMessage" class="error">{{ leaderBoardsErrorMessage }}</p>
+      <p v-if="leaderBoardsLoading">Loading leader boards...</p>
+
+      <div class="leader-boards-layout">
+        <div class="json-output-panel">
+          <table v-if="!leaderBoardsLoading" class="events-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Year</th>
+                <th>Event Count</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="leaderBoard in leaderBoards" :key="leaderBoard.id">
+                <td>{{ leaderBoard.name }}</td>
+                <td>{{ leaderBoard.year }}</td>
+                <td>{{ leaderBoard.eventCount }}</td>
+                <td>
+                  <button type="button" @click="createLeaderBoardScoreView(leaderBoard)">Create</button>
+                </td>
+              </tr>
+              <tr v-if="leaderBoards.length === 0">
+                <td colspan="4" class="empty-state">No leader boards yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="activeLeaderBoard !== null" class="json-output-panel transformed-output-panel">
+          <h3>Leader Board Scores: {{ activeLeaderBoard.name }}</h3>
+          <p v-if="leaderBoardScoresErrorMessage" class="error">{{ leaderBoardScoresErrorMessage }}</p>
+          <p v-if="leaderBoardScoresLoading">Creating scores...</p>
+
+          <div v-if="!leaderBoardScoresLoading && leaderBoardScoresRows.length > 0" class="transformed-mode-switch">
+            <label>
+              <input v-model="leaderBoardScoresDisplayMode" type="radio" value="raw" />
+              Raw
+            </label>
+            <label>
+              <input v-model="leaderBoardScoresDisplayMode" type="radio" value="scaled" />
+              Scaled
+            </label>
+          </div>
+
+          <table v-if="!leaderBoardScoresLoading && leaderBoardScoresRows.length > 0" class="events-table transformed-table">
+            <thead>
+              <tr>
+                <th
+                  v-for="column in leaderBoardScoreColumns"
+                  :key="`leader-board-score-header-${column}`"
+                  :class="{ 'sortable-header': isLeaderBoardScoreColumn(column) }"
+                  @click="sortLeaderBoardScoresBy(column)"
+                >
+                  {{ leaderBoardColumnLabel(column) }}{{ leaderBoardSortIndicator(column) }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, rowIndex) in sortedLeaderBoardScoreRows" :key="`leader-board-score-row-${rowIndex}`">
+                <td
+                  v-for="column in leaderBoardScoreColumns"
+                  :key="`leader-board-score-cell-${rowIndex}-${column}`"
+                  :class="{
+                    'scaled-score-cell': leaderBoardScoresDisplayMode === 'scaled' && column !== 'team_name' && column !== 'team_member',
+                    'member-cell': column === 'team_member'
+                  }"
+                  @click="column === 'team_member' ? openLeaderBoardMemberDialog(row) : null"
+                >
+                  {{ formatLeaderBoardScoreCell(row, column) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-else-if="!leaderBoardScoresLoading" class="empty-state">No scores found for this leader board.</p>
+        </div>
+      </div>
+    </section>
+
+    <div v-if="showLeaderBoardMemberDialog" class="dialog-backdrop">
+      <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Member event scores">
+        <h3>Member Event Scores</h3>
+        <p>{{ selectedLeaderBoardMember }}</p>
+        <p v-if="leaderBoardMemberEventsErrorMessage" class="error">{{ leaderBoardMemberEventsErrorMessage }}</p>
+        <p v-if="leaderBoardMemberEventsLoading">Loading event scores...</p>
+
+        <table v-if="!leaderBoardMemberEventsLoading && leaderBoardMemberEventRows.length > 0" class="events-table mapping-table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Date</th>
+              <th>Score</th>
+              <th>Categories</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="eventRow in leaderBoardMemberEventRows" :key="`member-event-row-${eventRow.eventId}`">
+              <td>{{ eventRow.eventName }}</td>
+              <td>{{ eventRow.date }}</td>
+              <td>{{ eventRowScoreValue(eventRow) }}</td>
+              <td>{{ eventRowCategoriesText(eventRow) || ' ' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else-if="!leaderBoardMemberEventsLoading" class="empty-state">No event scores found for this member.</p>
+
+        <div class="mapping-dialog-actions">
+          <button type="button" @click="closeLeaderBoardMemberDialog">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showCreateLeaderBoardDialog" class="dialog-backdrop">
+      <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Create leader board">
+        <h3>Create Leader Board</h3>
+        <div class="json-loader-controls">
+          <label>
+            Name
+            <input v-model="newLeaderBoardName" type="text" placeholder="Leader board name" />
+          </label>
+          <label>
+            Year
+            <input v-model="newLeaderBoardYear" type="text" inputmode="numeric" placeholder="2026" />
+          </label>
+        </div>
+        <p v-if="leaderBoardYearResultsLoading">Loading results for selected year...</p>
+        <p v-if="leaderBoardYearResultsErrorMessage" class="error">{{ leaderBoardYearResultsErrorMessage }}</p>
+        <p v-if="createLeaderBoardErrorMessage" class="error">{{ createLeaderBoardErrorMessage }}</p>
+
+        <table v-if="leaderBoardYearResults.length > 0" class="events-table mapping-table">
+          <thead>
+            <tr>
+              <th>Select</th>
+              <th>Name</th>
+              <th>Series</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="result in leaderBoardYearResults" :key="`leader-board-result-${result.id}`">
+              <td>
+                <input
+                  type="checkbox"
+                  :checked="selectedLeaderBoardResultIds.includes(result.id)"
+                  @change="toggleLeaderBoardResultSelection(result.id)"
+                />
+              </td>
+              <td>{{ result.name }}</td>
+              <td>{{ result.series }}</td>
+              <td>{{ result.date }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else-if="!leaderBoardYearResultsLoading" class="empty-state">Load year results to select entries.</p>
+
+        <div class="mapping-dialog-actions">
+          <button type="button" @click="closeCreateLeaderBoardDialog">Cancel</button>
+          <button type="button" @click="createLeaderBoard" :disabled="createLeaderBoardLoading">
+            {{ createLeaderBoardLoading ? 'Saving...' : 'Save Leader Board' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showCategoryMappingDialog" class="dialog-backdrop">
       <div class="mapping-dialog" role="dialog" aria-modal="true" aria-label="Category mapping">
         <h3>Category Mapping</h3>
@@ -861,6 +1430,11 @@ button {
   text-align: left;
 }
 
+.events-table th.sortable-header {
+  cursor: pointer;
+  user-select: none;
+}
+
 .error {
   color: #b00020;
 }
@@ -915,6 +1489,11 @@ button {
 
 .events-table td.scaled-score-cell {
   text-align: right;
+}
+
+.events-table td.member-cell {
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .dialog-backdrop {
@@ -974,6 +1553,14 @@ button {
   width: 100%;
 }
 
+.leader-boards-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+  align-items: start;
+  width: 100%;
+}
+
 .transformed-table {
   margin-top: 0;
   width: max-content;
@@ -994,6 +1581,10 @@ button {
   }
 
   .json-panels {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  .leader-boards-layout {
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   }
 }

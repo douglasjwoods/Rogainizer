@@ -22,6 +22,27 @@ CREATE TABLE IF NOT EXISTS events (
   UNIQUE KEY uq_events_year_series_name (year, series, name)
 );
 
+CREATE TABLE IF NOT EXISTS leader_boards (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  year INT NOT NULL,
+  event_count INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS leader_board_results (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  leader_board_id INT NOT NULL,
+  event_id INT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_leader_board_results_leader_board FOREIGN KEY (leader_board_id) REFERENCES leader_boards(id) ON DELETE CASCADE,
+  CONSTRAINT fk_leader_board_results_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_leader_board_results_board_event (leader_board_id, event_id),
+  INDEX idx_leader_board_results_board_id (leader_board_id),
+  INDEX idx_leader_board_results_event_id (event_id)
+);
+
 CREATE TABLE IF NOT EXISTS results (
   id INT AUTO_INCREMENT PRIMARY KEY,
   event_id INT NOT NULL,
