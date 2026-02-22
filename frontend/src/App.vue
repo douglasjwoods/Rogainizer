@@ -694,17 +694,23 @@ function normalizeTeamMemberName(value) {
     return collapsed;
   }
 
-  return collapsed
-    .toLowerCase()
-    .split(' ')
-    .map((word) => word
-      .split('-')
-      .map((hyphenPart) => hyphenPart
-        .split("'")
-        .map((apostrophePart) => apostrophePart.charAt(0).toUpperCase() + apostrophePart.slice(1))
-        .join("'"))
-      .join('-'))
-    .join(' ');
+  const lower = collapsed.toLowerCase();
+  return lower.replace(/(^|[^a-zA-Z])([a-z])/g, (match, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
+}
+
+function hasNzCountryCode(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/\(([^)]+)\)\s*$/);
+  if (!match) {
+    return false;
+  }
+
+  const code = String(match[1] || '').trim().toUpperCase();
+  return code === 'NZ' || code === 'NZL';
+}
+
+function stripTrailingCountryCode(value) {
+  return String(value || '').trim().replace(/\s*\(([^)]+)\)\s*$/g, '').trim();
 }
 
 function parseTeamNameAndMembers(rawName) {
@@ -731,11 +737,24 @@ function parseTeamNameAndMembers(rawName) {
     const membersText = fullName.slice(colonIndex + 1);
     const members = membersText
       .split(',')
-      .map((member) => normalizeTeamMemberName(member.replace(/[.)]+$/g, '')))
+      .map((member) => normalizeTeamMemberName(member.replace(/[.]+$/g, '')))
       .filter(Boolean);
 
     return {
       teamName,
+      members
+    };
+  }
+
+  const parenthesizedMemberListPattern = /^\s*[^,;:]+?\([^)]*\)\s*(,\s*[^,;:]+?\([^)]*\)\s*)+$/;
+  if (parenthesizedMemberListPattern.test(fullName)) {
+    const members = fullName
+      .split(',')
+      .map((member) => normalizeTeamMemberName(member))
+      .filter(Boolean);
+
+    return {
+      teamName: members[0] || '',
       members
     };
   }
@@ -746,7 +765,7 @@ function parseTeamNameAndMembers(rawName) {
     const membersText = fullName.slice(openParenIndex + 1);
     const members = membersText
       .split(',')
-      .map((member) => normalizeTeamMemberName(member.replace(/[.)]+$/g, '')))
+      .map((member) => normalizeTeamMemberName(member.replace(/[.]+$/g, '')))
       .filter(Boolean);
 
     return {
@@ -827,6 +846,11 @@ function transformLoadedJson() {
 
   for (const team of teamsData) {
     const { teamName, members } = parseTeamNameAndMembers(team?.name);
+    const filteredMembers = members.filter((member) => hasNzCountryCode(member));
+    if (filteredMembers.length === 0) {
+      continue;
+    }
+
     const finalScore = team?.final_score ?? null;
     const rawTeamCategories = extractNormalizedTeamCategories(team?.category);
     const mappedTeamCategories = new Set(
@@ -835,10 +859,10 @@ function transformLoadedJson() {
         .filter(Boolean)
     );
 
-    for (const member of members) {
+    for (const member of filteredMembers) {
       const row = {
         team_name: teamName,
-        team_member: member,
+        team_member: stripTrailingCountryCode(member),
         final_score: finalScore
       };
 
@@ -888,16 +912,6 @@ function closeCategoryMappingDialog() {
 }
 
 function applyCategoryMappingAndTransform() {
-  const selectedMappings = categoryMappingRows.value
-    .map((row) => normalizeRawTeamCategory(row?.mappedCategory))
-    .filter(Boolean);
-
-  const uniqueMappings = new Set(selectedMappings);
-  if (uniqueMappings.size !== selectedMappings.length) {
-    categoryMappingErrorMessage.value = 'Duplicate mapped categories are not allowed (except Unmapped).';
-    return;
-  }
-
   categoryMappingErrorMessage.value = '';
   showCategoryMappingDialog.value = false;
   transformLoadedJson();

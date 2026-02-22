@@ -193,9 +193,9 @@ router.post('/:eventId/transformed-results', async (req, res) => {
       const teamName = String(row?.team_name || '').trim();
       const teamMember = String(row?.team_member || '').trim();
 
-      if (!teamName || !teamMember) {
+      if (!teamMember) {
         await connection.rollback();
-        return res.status(400).json({ message: 'Each row must include team_name and team_member.' });
+        return res.status(400).json({ message: 'Each row must include team_member.' });
       }
 
       const values = [
